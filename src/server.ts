@@ -320,7 +320,7 @@ export async function startServer(
                 const nmsg = notifErr instanceof Error ? notifErr.message : String(notifErr);
                 console.error(`[create_service_provider] Notification failed: ${nmsg}`);
               }
-              rediscoverStatus = `New tools are now available (${allTools.length} total, was ${beforeToolCount}).`;
+              rediscoverStatus = `Server-side rediscovery complete (${allTools.length} tools, was ${beforeToolCount}). IMPORTANT: Claude Desktop does not honor notifications/tools/list_changed, so the new per-type create_* and query_* tools will not appear in your tool palette until you quit Claude Desktop (Cmd+Q) and relaunch. After relaunching, retry the resource creation.`;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               console.error(`[create_service_provider] Rediscovery failed:`, err);
