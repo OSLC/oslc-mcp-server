@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   const discovery = await discover(client, config);
 
   // Start MCP server with shared tool generation
-  await startServer(client, discovery, config.serverURL, config.catalogURL);
+  await startServer(client, discovery, config.serverURL, config.catalogURL, config);
 }
 
 main().catch((err) => {
