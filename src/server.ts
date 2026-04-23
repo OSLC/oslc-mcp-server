@@ -24,6 +24,8 @@ import {
   resourceToJson,
 } from 'oslc-service/mcp';
 import type { GeneratedTool } from 'oslc-service/mcp';
+import { discover } from './discovery.js';
+import type { ServerConfig } from './server-config.js';
 
 /**
  * HTTP-based MCP context adapter that wraps OSLCClient for the generic handlers.
@@ -236,43 +238,47 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
 
 /**
  * Build and start the MCP server with discovered tools and resources.
- *
- * Discovery runs once at startup. After a successful
- * create_service_provider, the process exits so the stdio MCP client
- * respawns oslc-mcp-server; the fresh process rediscovers at startup
- * and advertises the new per-SP create/query tools on the next
- * tools/list request. This approach is more reliable across MCP
- * clients than sending notifications/tools/list_changed — some clients
- * (notably Claude Desktop) do not refresh their tool palette on that
- * notification.
  */
 export async function startServer(
   client: OSLCClient,
-  discovery: DiscoveryResult,
+  initialDiscovery: DiscoveryResult,
   serverURL: string,
-  catalogURL: string
+  catalogURL: string,
+  config: ServerConfig
 ): Promise<void> {
   const context = new HttpToolContext(client, serverURL, catalogURL);
 
-  const generatedTools = generateTools(context as any, discovery);
-  const generatedHandlers = new Map<string, (args: any) => Promise<string>>();
-  for (const tool of generatedTools) {
-    generatedHandlers.set(tool.name, tool.handler);
+  // Mutable state — rebuilt after create_service_provider so new SPs
+  // become usable without restarting the MCP server.
+  let discovery: DiscoveryResult = initialDiscovery;
+  let generatedHandlers = new Map<string, (args: any) => Promise<string>>();
+  let allTools: McpToolDefinition[] = [];
+  let mcpResources: McpResourceDefinition[] = [];
+
+  /** Rebuild tools and resources from the current discovery state. */
+  function rebuildToolsAndResources(): void {
+    const generatedTools = generateTools(context as any, discovery);
+    generatedHandlers = new Map<string, (args: any) => Promise<string>>();
+    for (const tool of generatedTools) {
+      generatedHandlers.set(tool.name, tool.handler);
+    }
+    allTools = [
+      ...generatedTools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      })),
+      ...GENERIC_TOOLS,
+    ];
+    mcpResources = buildMcpResources(discovery, context.serverName, context.serverBase);
+    console.error(`[rebuild] ${generatedTools.length} per-type tools, ${mcpResources.length} resources`);
   }
-  const allTools: McpToolDefinition[] = [
-    ...generatedTools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
-    })),
-    ...GENERIC_TOOLS,
-  ];
-  const mcpResources = buildMcpResources(discovery, context.serverName, context.serverBase);
-  console.error(`[startup] ${generatedTools.length} per-type tools, ${mcpResources.length} resources`);
+
+  rebuildToolsAndResources();
 
   const server = new Server(
     { name: 'oslc-mcp-server', version: '1.0.0' },
-    { capabilities: { tools: {}, resources: {} } }
+    { capabilities: { tools: { listChanged: true }, resources: { listChanged: true } } }
   );
 
   // Register handlers
@@ -296,24 +302,37 @@ export async function startServer(
             const spURI = await context.createServiceProvider(spArgs.title, spArgs.slug, spArgs.description);
             console.error(`[create_service_provider] Created ${spURI}`);
 
-            // MCP stdio clients such as Claude Desktop do not refresh their
-            // tool palette on notifications/tools/list_changed. Instead of
-            // doing an in-process rediscovery that the client ignores, exit
-            // the process shortly after the response is sent so the client
-            // respawns oslc-mcp-server. The fresh process will run discover()
-            // at startup, pick up the new ServiceProvider, and advertise its
-            // create/query tools on the next tools/list request.
-            console.error('[create_service_provider] Scheduling exit so client reconnects with fresh tool list');
-            setTimeout(() => {
-              console.error('[create_service_provider] Exiting for client reconnect');
-              process.exit(0);
-            }, 500);
+            // Rediscover catalog so the new SP's create/query tools become
+            // available to the AI without restarting the MCP server.
+            let rediscoverStatus = '';
+            const beforeToolCount = allTools.length;
+            try {
+              console.error('[create_service_provider] Rediscovering catalog...');
+              discovery = await discover(client, config);
+              console.error(`[create_service_provider] Discovery complete: ${discovery.serviceProviders.length} SPs, ${discovery.serviceProviders.reduce((n, sp) => n + sp.factories.length, 0)} factories`);
+              rebuildToolsAndResources();
+              console.error(`[create_service_provider] Rebuilt tools: ${beforeToolCount} -> ${allTools.length}`);
+              try {
+                await server.sendToolListChanged();
+                await server.sendResourceListChanged();
+                console.error('[create_service_provider] Sent list_changed notifications');
+              } catch (notifErr) {
+                const nmsg = notifErr instanceof Error ? notifErr.message : String(notifErr);
+                console.error(`[create_service_provider] Notification failed: ${nmsg}`);
+              }
+              rediscoverStatus = `New tools are now available (${allTools.length} total, was ${beforeToolCount}).`;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`[create_service_provider] Rediscovery failed:`, err);
+              rediscoverStatus = `Rediscovery failed (${msg}); restart the MCP server to pick up the new ServiceProvider.`;
+            }
 
             result = JSON.stringify({
               uri: spURI,
               title: spArgs.title,
               slug: spArgs.slug,
-              message: `ServiceProvider "${spArgs.title}" created at ${spURI}. oslc-mcp-server is exiting so the MCP client will reconnect and load the new create/query tools for this ServiceProvider. Retry your next tool call once the reconnect completes.`,
+              toolCount: allTools.length,
+              message: `ServiceProvider "${spArgs.title}" created at ${spURI}. ${rediscoverStatus}`,
             });
             break;
           }
