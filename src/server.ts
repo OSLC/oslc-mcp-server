@@ -300,18 +300,30 @@ export async function startServer(
           case 'create_service_provider': {
             const spArgs = args as { title: string; slug: string; description?: string };
             const spURI = await context.createServiceProvider(spArgs.title, spArgs.slug, spArgs.description);
+            console.error(`[create_service_provider] Created ${spURI}`);
 
             // Rediscover catalog so the new SP's create/query tools become
             // available to the AI without restarting the MCP server.
             let rediscoverStatus = '';
+            const beforeToolCount = allTools.length;
             try {
+              console.error('[create_service_provider] Rediscovering catalog...');
               discovery = await discover(client, config);
+              console.error(`[create_service_provider] Discovery complete: ${discovery.serviceProviders.length} SPs, ${discovery.serviceProviders.reduce((n, sp) => n + sp.factories.length, 0)} factories`);
               rebuildToolsAndResources();
-              await server.notification({ method: 'notifications/tools/list_changed' });
-              await server.notification({ method: 'notifications/resources/list_changed' });
-              rediscoverStatus = 'New create/query tools for this ServiceProvider are now available.';
+              console.error(`[create_service_provider] Rebuilt tools: ${beforeToolCount} -> ${allTools.length}`);
+              try {
+                await server.sendToolListChanged();
+                await server.sendResourceListChanged();
+                console.error('[create_service_provider] Sent list_changed notifications');
+              } catch (notifErr) {
+                const nmsg = notifErr instanceof Error ? notifErr.message : String(notifErr);
+                console.error(`[create_service_provider] Notification failed: ${nmsg}`);
+              }
+              rediscoverStatus = `New tools are now available (${allTools.length} total, was ${beforeToolCount}).`;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
+              console.error(`[create_service_provider] Rediscovery failed:`, err);
               rediscoverStatus = `Rediscovery failed (${msg}); restart the MCP server to pick up the new ServiceProvider.`;
             }
 
@@ -319,6 +331,7 @@ export async function startServer(
               uri: spURI,
               title: spArgs.title,
               slug: spArgs.slug,
+              toolCount: allTools.length,
               message: `ServiceProvider "${spArgs.title}" created at ${spURI}. ${rediscoverStatus}`,
             });
             break;
