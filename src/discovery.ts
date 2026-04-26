@@ -84,9 +84,20 @@ export async function discover(
 
     const factories: DiscoveredFactory[] = [];
     const queries: DiscoveredQuery[] = [];
+    const domainSet = new Set<string>();
 
     for (const serviceNode of serviceNodes) {
       const sn = serviceNode as NamedNode;
+
+      // oslc:domain — vocabulary namespace URIs declared by this
+      // service. Per OSLC Core, vocabularies are discovered through
+      // the catalog: each SP advertises its domains here, and
+      // clients fetch the domain content via get_resource on the URI.
+      const domainNodes = spStore.each(sn, oslcNS('domain'), null);
+      for (const dn of domainNodes) {
+        if (dn.termType === 'NamedNode') domainSet.add(dn.value);
+      }
+
       // Creation factories
       const factoryNodes = spStore.each(
         sn,
@@ -181,6 +192,7 @@ export async function discover(
       uri: spURI,
       factories,
       queries,
+      domains: [...domainSet],
     });
   }
 
