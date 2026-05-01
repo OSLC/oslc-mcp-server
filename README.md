@@ -2,6 +2,8 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that connects to any OSLC 3.0 server, discovers its capabilities, and exposes them as MCP tools and resources for LLM-driven CRUD operations.
 
+This module is the **AAKI bridge for third-party OSLC servers** — exposing them as AI-addressable knowledge stores when they don't embed MCP themselves. See the [AAKI framework](../docs/AAKI.md) for the architectural context.
+
 ## The Problem
 
 AI assistants can't interact with OSLC servers directly. This module bridges that gap by dynamically discovering an OSLC server's service providers, creation factories, query capabilities, and resource shapes at startup, then exposing them as typed MCP tools that any MCP-compatible AI assistant can call.
