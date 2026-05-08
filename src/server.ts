@@ -22,9 +22,10 @@ import {
   handleListResourceTypes,
   handleQueryResources,
   resourceToJson,
+  formatCatalogContent,
 } from 'oslc-service/mcp';
 import type { GeneratedTool } from 'oslc-service/mcp';
-import { discover } from './discovery.js';
+import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
 
 /**
@@ -63,7 +64,7 @@ class HttpToolContext {
   }
 
   async getResource(uri: string): Promise<{ turtle: string; etag: string }> {
-    const resource = await this.client.getResource(uri, '3.0', 'text/turtle');
+    const resource = await this.client.getResource(uri, '3.0', ACCEPT_RDF);
     let turtle = '';
     rdfSerialize(null, resource.store, uri, 'text/turtle', (err, content) => {
       if (!err && content) turtle = content;
@@ -94,7 +95,7 @@ class HttpToolContext {
   }
 
   async deleteResource(uri: string): Promise<void> {
-    const resource = await this.client.getResource(uri, '3.0', 'text/turtle');
+    const resource = await this.client.getResource(uri, '3.0', ACCEPT_RDF);
     await this.client.deleteResource(resource, '3.0');
   }
 
@@ -104,7 +105,7 @@ class HttpToolContext {
     if (params.select) parts.push(`oslc.select=${encodeURIComponent(params.select)}`);
     if (params.orderBy) parts.push(`oslc.orderBy=${encodeURIComponent(params.orderBy)}`);
     const fullURL = parts.length > 0 ? `${queryURL}?${parts.join('&')}` : queryURL;
-    const resource = await this.client.getResource(fullURL, '3.0', 'text/turtle');
+    const resource = await this.client.getResource(fullURL, '3.0', ACCEPT_RDF);
 
     // Extract member resources from the LDP container response.
     // The query response is an LDP BasicContainer with ldp:contains
@@ -245,6 +246,21 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
       'Return the OSLC ServiceProvider Catalog: every ServiceProvider on this server with its creation factories, query capabilities, resource types, vocabulary references (oslc:domain), and shape references (oslc:resourceShape). Mirrors the oslc://catalog MCP resource. Fetch the referenced vocabulary and shape URIs with get_resource for their full content.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
+  {
+    name: 'read_service_provider',
+    description:
+      'Return one ServiceProvider in the same format as read_catalog — its creation factories, query capabilities, resource types, vocabulary references (oslc:domain), and shape references — fetched on demand from the supplied ServiceProvider URL. Use this when read_catalog returns many ServiceProviders and you want to drill into one without forcing the server to crawl every SP at startup. The shape documents referenced by factories are fetched too; their content can be retrieved with get_resource.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serviceProviderURL: {
+          type: 'string',
+          description: 'The OSLC ServiceProvider resource URL (the URI listed under oslc:serviceProvider in the catalog).',
+        },
+      },
+      required: ['serviceProviderURL'],
+    },
+  },
 ];
 
 /**
@@ -365,6 +381,22 @@ export async function startServer(
           case 'read_catalog': {
             const catalogHeader = `**Server:** ${context.serverName}\n**Base URL:** ${context.serverBase}\n\n`;
             result = catalogHeader + discovery.catalogContent;
+            break;
+          }
+          case 'read_service_provider': {
+            const spArgs = args as { serviceProviderURL: string };
+            if (!spArgs?.serviceProviderURL) {
+              throw new Error("read_service_provider requires 'serviceProviderURL'");
+            }
+            console.error(`[read_service_provider] Fetching ${spArgs.serviceProviderURL}`);
+            const sp = await discoverServiceProvider(client, spArgs.serviceProviderURL);
+            if (!sp) {
+              throw new Error(`Could not fetch or parse ServiceProvider at ${spArgs.serviceProviderURL}`);
+            }
+            // Reuse the shared formatter for a single SP so the output
+            // matches the format of read_catalog.
+            const header = `**Server:** ${context.serverName}\n**Base URL:** ${context.serverBase}\n\n`;
+            result = header + formatCatalogContent([sp]);
             break;
           }
           default:
