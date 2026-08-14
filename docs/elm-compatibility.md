@@ -72,25 +72,27 @@ EWM          /ccm/oslc/contexts/<id>/workitems/services.xml
 
 Resolving a stream or baseline URI to use as a `Configuration-Context` was not achieved by API alone; the component picker in the web UI remains the practical route.
 
-### 6. Query capability is advertised, but its actual behaviour is not — **and one server silently ignores `oslc.where`**
+### 6. Query capability is advertised, but its actual behaviour is not
 
 An `oslc:QueryCapability` declares `oslc:queryBase` and `oslc:resourceType`, and sometimes `oslc:resourceShape`. It declares nothing about which `oslc.where` operators work, whether `oslc.select` supports nesting, whether `oslc.orderBy` is honoured, whether `oslc.searchTerms` exists, or how paging behaves.
 
-Measured on the same deployment, with an `oslc.where` chosen to match **nothing**:
+Measured on one deployment, with an `oslc.where` chosen to match **nothing**:
 
 | Application | Query capabilities advertised | Unfiltered query | `oslc.where` that matches nothing |
 |---|---|---|---|
-| EWM | 2 | ✅ Returns work items | ❌ `400` — `oslc:Error … "Cannot reconstruct value"` |
-| DOORS Next | 8 | ✅ Returns members | ⚠️ **`200`, and the same members as unfiltered** |
+| EWM | 2 | Returns work items | `400` — `oslc:Error … "Cannot reconstruct value"` |
+| DOORS Next | 8 | Returns members | `200`, **and the same members as unfiltered** |
 | ETM | **0** | — | — |
 
-**DOORS Next accepts the filter and ignores it.** A query that should return nothing returns the entire collection, with a success status. Nothing in the response says the filter was discarded.
+> **Read these as observations, not as established product behaviour.** They were taken against **configuration-enabled** project areas, on a deployment whose configuration management was known to be misbehaving at the time, and **without supplying a `Configuration-Context`**. The requests also declared no **`oslc.prefix`** for the prefixes used in the filter. DOORS Next is expected to support `oslc.where`, so the most likely explanations are the missing configuration context or the undeclared prefix rather than the product. **The cause is not established.** This section will be revised once the same probes run against non-configuration-enabled project areas with prefixes declared.
 
-This is the failure mode to fear. A `400` is recoverable — a client sees the error and adapts. A silently ignored filter looks like a successful query, and any consumer reasoning over the result is **confidently wrong**. An assistant asking "which requirements have no test coverage?" would get every requirement back and report accordingly.
+What is worth recording regardless is the **shape** of the DOORS Next result: a filter that did not take effect, returned with a `200` and nothing to indicate it had been discarded. Whether the cause is the product, the absent configuration context, or an undeclared prefix, **a client cannot tell from the response** — and a consumer reasoning over the result would be confidently wrong. An assistant asking "which requirements have no test coverage?" would get every requirement back and report accordingly.
 
-**How to detect it:** never trust a filter's status code. Establish an unfiltered baseline count, then issue a filter that cannot match, and compare. If the counts are equal, the parameter was ignored.
+**So do not trust a filter's status code.** Establish an unfiltered baseline count, issue a filter that cannot match, and compare. If the counts are equal the filter did not take effect — and the check does not depend on knowing why, which is exactly why it is worth doing.
 
-**ETM advertises no query capabilities at all**, so its resources cannot be found by OSLC query on this deployment — only by direct `GET` of a known URI, or through another application's links.
+**Declare your prefixes.** OSLC query expects prefixes used in `oslc.where` and `oslc.select` to be declared with `oslc.prefix` unless the server supplies built-in defaults, and servers differ on which they supply. A server that cannot resolve a prefix may reject the query — or may discard the clause. *(This MCP server does not currently send `oslc.prefix` at all. That is a gap here, not a finding about ELM.)*
+
+**ETM advertised no query capabilities** in the service provider examined. Not yet retested outside a configuration-enabled project area.
 
 Tracked as [#1](https://github.com/OSLC/oslc-mcp-server/issues/1): probe each query capability, record `supported` / `unsupported` / **`ignored`**, and surface the answer where the caller will see it.
 
@@ -118,6 +120,7 @@ Generated tool names also derive from factory *titles* rather than resource type
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
 - **Whether create, update and delete actually work.** `list_resource_types` and unfiltered query are confirmed against all applications that support them; the write path has not been exercised.
+- **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
 - **Configuration-context behaviour** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
 - **Whether creation factories enforce their advertised shapes**, and which properties are genuinely writable. A factory advertises a shape; it does not advertise whether it means it.
 
