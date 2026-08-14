@@ -64,7 +64,7 @@ export async function discoverServiceProvider(
 ): Promise<DiscoveredServiceProvider | null> {
   let spResource: OSLCResource;
   try {
-    spResource = await client.getResource(spURI, '3.0', ACCEPT_RDF);
+    spResource = await client.getResource(spURI, '2.0', ACCEPT_RDF);
   } catch (err) {
     console.error(`[discovery] Failed to fetch SP ${spURI}:`, err);
     return null;
@@ -109,7 +109,7 @@ export async function discoverServiceProvider(
           try {
             const shapeDocURI = shapeURI.split('#')[0];
             console.error(`[discovery] Fetching shape: ${shapeDocURI}`);
-            const shapeResource = await client.getResource(shapeDocURI, '3.0', ACCEPT_RDF);
+            const shapeResource = await client.getResource(shapeDocURI, '2.0', ACCEPT_RDF);
             shape = parseShape(shapeResource, shapeURI !== shapeDocURI ? shapeURI : undefined);
             sharedShapes.set(shapeURI, shape);
           } catch (err) {
@@ -203,7 +203,7 @@ export async function discover(
 
   // Fetch catalog
   console.error(`[discovery] Fetching catalog: ${catalogURL}`);
-  const catalogResource = await client.getResource(catalogURL, '3.0', ACCEPT_RDF);
+  const catalogResource = await client.getResource(catalogURL, '2.0', ACCEPT_RDF);
   const catalogStore = catalogResource.store;
   const catalogSym = catalogStore.sym(catalogURL);
 

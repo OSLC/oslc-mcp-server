@@ -59,7 +59,7 @@ class HttpToolContext {
       headers: {
         'Content-Type': 'text/turtle',
         'Accept': 'text/turtle',
-        'OSLC-Core-Version': '3.0',
+        'OSLC-Core-Version': '2.0',
         'Slug': slug,
       },
     });
@@ -67,7 +67,7 @@ class HttpToolContext {
   }
 
   async getResource(uri: string): Promise<{ turtle: string; etag: string }> {
-    const resource = await this.client.getResource(uri, '3.0', ACCEPT_RDF);
+    const resource = await this.client.getResource(uri, '2.0', ACCEPT_RDF);
     let turtle = '';
     rdfSerialize(null, resource.store, uri, 'text/turtle', (err, content) => {
       if (!err && content) turtle = content;
@@ -81,7 +81,7 @@ class HttpToolContext {
       headers: {
         'Content-Type': 'text/turtle',
         'Accept': 'text/turtle',
-        'OSLC-Core-Version': '3.0',
+        'OSLC-Core-Version': '2.0',
       },
     });
     return response.headers?.location ?? '';
@@ -91,15 +91,15 @@ class HttpToolContext {
     await (this.client as any).client.put(uri, turtle, {
       headers: {
         'Content-Type': 'text/turtle',
-        'OSLC-Core-Version': '3.0',
+        'OSLC-Core-Version': '2.0',
         'If-Match': etag,
       },
     });
   }
 
   async deleteResource(uri: string): Promise<void> {
-    const resource = await this.client.getResource(uri, '3.0', ACCEPT_RDF);
-    await this.client.deleteResource(resource, '3.0');
+    const resource = await this.client.getResource(uri, '2.0', ACCEPT_RDF);
+    await this.client.deleteResource(resource, '2.0');
   }
 
   async queryResources(queryURL: string, params: { filter?: string; select?: string; orderBy?: string }): Promise<string> {
@@ -108,7 +108,7 @@ class HttpToolContext {
     if (params.select) parts.push(`oslc.select=${encodeURIComponent(params.select)}`);
     if (params.orderBy) parts.push(`oslc.orderBy=${encodeURIComponent(params.orderBy)}`);
     const fullURL = parts.length > 0 ? `${queryURL}?${parts.join('&')}` : queryURL;
-    const resource = await this.client.getResource(fullURL, '3.0', ACCEPT_RDF);
+    const resource = await this.client.getResource(fullURL, '2.0', ACCEPT_RDF);
 
     // Extract member resources from the LDP container response.
     // The query response is an LDP BasicContainer with ldp:contains
