@@ -107,7 +107,12 @@ class HttpToolContext {
     if (params.filter) parts.push(`oslc.where=${encodeURIComponent(params.filter)}`);
     if (params.select) parts.push(`oslc.select=${encodeURIComponent(params.select)}`);
     if (params.orderBy) parts.push(`oslc.orderBy=${encodeURIComponent(params.orderBy)}`);
-    const fullURL = parts.length > 0 ? `${queryURL}?${parts.join('&')}` : queryURL;
+    // A queryBase may already carry query parameters — DOORS Next advertises
+    // bases like `.../query?componentURI=…`. Appending '?' unconditionally
+    // produced a URL with two '?', which the server accepts and silently
+    // mishandles rather than rejecting.
+    const separator = queryURL.includes('?') ? '&' : '?';
+    const fullURL = parts.length > 0 ? `${queryURL}${separator}${parts.join('&')}` : queryURL;
     const resource = await this.client.getResource(fullURL, '2.0', ACCEPT_RDF);
 
     // Extract member resources from the LDP container response.
