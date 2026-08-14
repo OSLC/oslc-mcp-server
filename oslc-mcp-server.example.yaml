@@ -1,0 +1,69 @@
+# oslc-mcp-server configuration — copy to oslc-mcp-server.yaml and edit.
+#
+# The real file is git-ignored: it names a specific deployment and may carry
+# credentials. This example contains no real host, project area or credential.
+#
+# Run with:   oslc-mcp-server --config ./oslc-mcp-server.yaml
+#      or:    OSLC_CONFIG_FILE=./oslc-mcp-server.yaml oslc-mcp-server
+#
+# ── serviceProviders ────────────────────────────────────────────────────
+# Scopes startup discovery. On an ELM application one service provider is
+# one project area, and a production server may have thousands; listing the
+# few you actually use turns startup from a full catalog crawl into a
+# bounded set of fetches. Omit the list entirely to walk the catalog.
+#
+# ── catalogUrl ──────────────────────────────────────────────────────────
+# Optional. When absent it is read from ${baseUrl}/rootservices, selecting
+# the domain's service-providers predicate — which is why the ELM entries
+# below do not need it. Falls back to ${baseUrl}/oslc/catalog for servers
+# that publish no rootservices.
+#
+# ── configurationContext ────────────────────────────────────────────────
+# Required against configuration-enabled ELM project areas: it names the
+# stream or baseline requests resolve against. Set per service provider
+# where a project area works in a specific configuration; the server-level
+# value is the fallback.
+#
+# ── credentials ─────────────────────────────────────────────────────────
+# Prefer usernameEnv/passwordEnv, naming environment variables. Literal
+# username/password also work and emit one warning at load — the file is
+# git-ignored, but it still travels in pastes, backups and screen shares.
+
+servers:
+  - alias: dng
+    baseUrl: https://elm.example.com/rm
+    credentials:
+      usernameEnv: ELM_USER
+      passwordEnv: ELM_PASSWORD
+    serviceProviders:
+      - uri: https://elm.example.com/rm/oslc_rm/_PROJECT_AREA_ID/services.xml
+        alias: requirements
+        configurationContext: https://elm.example.com/gc/configuration/GC_ID
+
+  - alias: etm
+    baseUrl: https://elm.example.com/qm
+    credentials:
+      usernameEnv: ELM_USER
+      passwordEnv: ELM_PASSWORD
+    serviceProviders:
+      - uri: https://elm.example.com/qm/oslc_qm/_PROJECT_AREA_ID/services.xml
+        alias: test
+        configurationContext: https://elm.example.com/gc/configuration/GC_ID
+
+  - alias: ewm
+    baseUrl: https://elm.example.com/ccm
+    credentials:
+      usernameEnv: ELM_USER
+      passwordEnv: ELM_PASSWORD
+    serviceProviders:
+      - uri: https://elm.example.com/ccm/oslc/contexts/_PROJECT_AREA_ID/workitems/services.xml
+        alias: change
+    # Work items are not versioned, so no configuration context applies.
+
+  # A single non-ELM server needs far less: no rootservices, so the
+  # ${baseUrl}/oslc/catalog convention applies, and no configuration context.
+  # - alias: bmm
+  #   baseUrl: http://localhost:8080
+  #   credentials:
+  #     usernameEnv: BMM_USER
+  #     passwordEnv: BMM_PASSWORD

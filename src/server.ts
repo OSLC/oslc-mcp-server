@@ -7,7 +7,8 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { OSLCClient } from 'oslc-client';
-import { serialize as rdfSerialize } from 'rdflib';
+// rdflib is CommonJS — default import, not named. See the note in discovery.ts.
+import rdflib from 'rdflib';
 import type {
   DiscoveryResult,
   McpToolDefinition,
@@ -28,6 +29,8 @@ import type { GeneratedTool } from 'oslc-service/mcp';
 import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
 
+const { serialize: rdfSerialize } = rdflib;
+
 /**
  * HTTP-based MCP context adapter that wraps OSLCClient for the generic handlers.
  * The shared handlers expect an OslcMcpContext, but the standalone server uses
@@ -39,9 +42,9 @@ class HttpToolContext {
   private client: OSLCClient;
   private catalogURL: string;
 
-  constructor(client: OSLCClient, serverURL: string, catalogURL: string) {
+  constructor(client: OSLCClient, serverURL: string, catalogURL: string, serverName?: string) {
     this.client = client;
-    this.serverName = 'oslc-mcp-server';
+    this.serverName = serverName ?? 'oslc-mcp-server';
     this.serverBase = serverURL;
     this.catalogURL = catalogURL;
   }
@@ -263,67 +266,137 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
   },
 ];
 
+/** Names of the generic tools, for routing a prefixed call to its server. */
+const GENERIC_TOOL_NAMES = new Set(GENERIC_TOOLS.map((t) => t.name));
+
+/** One connected OSLC server, as prepared by `main()`. */
+export interface StartedServer {
+  alias: string;
+  client: OSLCClient;
+  discovery: DiscoveryResult;
+  config: ServerConfig;
+  /** '' for a single server; `${alias}_` when several are configured. */
+  prefix: string;
+}
+
 /**
- * Build and start the MCP server with discovered tools and resources.
+ * Per-server mutable runtime: its context, current discovery, and the tools
+ * and resources derived from them. Tool names and resource URIs are already
+ * namespaced by the server's prefix, so the MCP surface is flat.
  */
-export async function startServer(
-  client: OSLCClient,
-  initialDiscovery: DiscoveryResult,
-  serverURL: string,
-  catalogURL: string,
-  config: ServerConfig
-): Promise<void> {
-  const context = new HttpToolContext(client, serverURL, catalogURL);
+interface ServerRuntime {
+  spec: StartedServer;
+  context: HttpToolContext;
+  discovery: DiscoveryResult;
+  handlers: Map<string, (args: any) => Promise<string>>;
+  tools: McpToolDefinition[];
+  resources: McpResourceDefinition[];
+  rebuild(): void;
+}
 
-  // Mutable state — rebuilt after create_service_provider so new SPs
-  // become usable without restarting the MCP server.
-  let discovery: DiscoveryResult = initialDiscovery;
-  let generatedHandlers = new Map<string, (args: any) => Promise<string>>();
-  let allTools: McpToolDefinition[] = [];
-  let mcpResources: McpResourceDefinition[] = [];
-
-  /** Rebuild tools and resources from the current discovery state. */
-  function rebuildToolsAndResources(): void {
-    const generatedTools = generateTools(context as any, discovery);
-    generatedHandlers = new Map<string, (args: any) => Promise<string>>();
-    for (const tool of generatedTools) {
-      generatedHandlers.set(tool.name, tool.handler);
-    }
-    allTools = [
-      ...generatedTools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-      })),
-      ...GENERIC_TOOLS,
-    ];
-    mcpResources = buildMcpResources(discovery, context.serverName, context.serverBase);
-    console.error(`[rebuild] ${generatedTools.length} per-type tools, ${mcpResources.length} resources`);
-  }
-
-  rebuildToolsAndResources();
-
+/**
+ * Build and start the MCP server over one or more OSLC servers.
+ *
+ * With a single server, tool names and the `oslc://catalog` resource URI are
+ * exactly as before — existing configurations are unaffected. With several,
+ * each is prefixed by its alias so a call is unambiguous about which server
+ * it reaches.
+ */
+export async function startServer(servers: StartedServer[]): Promise<void> {
   const server = new Server(
     { name: 'oslc-mcp-server', version: '1.0.0' },
     { capabilities: { tools: { listChanged: true }, resources: { listChanged: true } } }
   );
 
+  const runtimes: ServerRuntime[] = servers.map((spec) => {
+    const context = new HttpToolContext(
+      spec.client, spec.config.serverURL, spec.config.catalogURL, spec.alias
+    );
+
+    const runtime: ServerRuntime = {
+      spec,
+      context,
+      discovery: spec.discovery,
+      handlers: new Map(),
+      tools: [],
+      resources: [],
+      rebuild(): void {
+        const generatedTools = generateTools(this.context as any, this.discovery);
+        this.handlers = new Map<string, (args: any) => Promise<string>>();
+        for (const tool of generatedTools) {
+          this.handlers.set(tool.name, tool.handler);
+        }
+        this.tools = [
+          ...generatedTools.map((t) => ({
+            name: `${spec.prefix}${t.name}`,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          })),
+          ...GENERIC_TOOLS.map((t) => ({ ...t, name: `${spec.prefix}${t.name}` })),
+        ];
+        // Exactly one resource per server (`oslc://catalog`), so namespace
+        // it by alias when several servers are configured.
+        this.resources = buildMcpResources(
+          this.discovery, this.context.serverName, this.context.serverBase
+        ).map((r) => ({
+          ...r,
+          uri: spec.prefix ? r.uri.replace('oslc://', `oslc://${spec.alias}/`) : r.uri,
+        }));
+        console.error(
+          `[rebuild] ${spec.alias}: ${generatedTools.length} per-type tools, ` +
+          `${this.resources.length} resources`
+        );
+      },
+    };
+
+    runtime.rebuild();
+    return runtime;
+  });
+
+  /**
+   * Route a tool call to the server that owns it. Longest prefix wins, so an
+   * unprefixed single-server setup still matches everything.
+   */
+  function routeTool(name: string): { runtime: ServerRuntime; inner: string } | null {
+    const candidates = runtimes
+      .filter((r) => name.startsWith(r.spec.prefix))
+      .sort((a, b) => b.spec.prefix.length - a.spec.prefix.length);
+    for (const runtime of candidates) {
+      const inner = name.slice(runtime.spec.prefix.length);
+      if (runtime.handlers.has(inner) || GENERIC_TOOL_NAMES.has(inner)) {
+        return { runtime, inner };
+      }
+    }
+    return null;
+  }
+
   // Register handlers
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: allTools,
+    tools: runtimes.flatMap((r) => r.tools),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
+    const route = routeTool(name);
+    if (!route) {
+      return {
+        content: [{ type: 'text' as const, text: `Unknown tool: ${name}` }],
+        isError: true,
+      };
+    }
+    const { runtime, inner } = route;
+    const { context, spec } = runtime;
+    const { client, config } = spec;
+
     try {
       let result: string;
 
-      const generatedHandler = generatedHandlers.get(name);
+      const generatedHandler = runtime.handlers.get(inner);
       if (generatedHandler) {
         result = await generatedHandler(args ?? {});
       } else {
-        switch (name) {
+        switch (inner) {
           case 'create_service_provider': {
             const spArgs = args as { title: string; slug: string; description?: string };
             const spURI = await context.createServiceProvider(spArgs.title, spArgs.slug, spArgs.description);
@@ -332,13 +405,13 @@ export async function startServer(
             // Rediscover catalog so the new SP's create/query tools become
             // available to the AI without restarting the MCP server.
             let rediscoverStatus = '';
-            const beforeToolCount = allTools.length;
+            const beforeToolCount = runtime.tools.length;
             try {
               console.error('[create_service_provider] Rediscovering catalog...');
-              discovery = await discover(client, config);
-              console.error(`[create_service_provider] Discovery complete: ${discovery.serviceProviders.length} SPs, ${discovery.serviceProviders.reduce((n, sp) => n + sp.factories.length, 0)} factories`);
-              rebuildToolsAndResources();
-              console.error(`[create_service_provider] Rebuilt tools: ${beforeToolCount} -> ${allTools.length}`);
+              runtime.discovery = await discover(client, config);
+              console.error(`[create_service_provider] Discovery complete: ${runtime.discovery.serviceProviders.length} SPs, ${runtime.discovery.serviceProviders.reduce((n, sp) => n + sp.factories.length, 0)} factories`);
+              runtime.rebuild();
+              console.error(`[create_service_provider] Rebuilt tools: ${beforeToolCount} -> ${runtime.tools.length}`);
               try {
                 await server.sendToolListChanged();
                 await server.sendResourceListChanged();
@@ -347,7 +420,7 @@ export async function startServer(
                 const nmsg = notifErr instanceof Error ? notifErr.message : String(notifErr);
                 console.error(`[create_service_provider] Notification failed: ${nmsg}`);
               }
-              rediscoverStatus = `Server-side rediscovery complete (${allTools.length} tools, was ${beforeToolCount}). IMPORTANT: Claude Desktop does not honor notifications/tools/list_changed, so the new per-type create_* and query_* tools will not appear in your tool palette until you quit Claude Desktop (Cmd+Q) and relaunch. After relaunching, retry the resource creation.`;
+              rediscoverStatus = `Server-side rediscovery complete (${runtime.tools.length} tools, was ${beforeToolCount}). IMPORTANT: Claude Desktop does not honor notifications/tools/list_changed, so the new per-type create_* and query_* tools will not appear in your tool palette until you quit Claude Desktop (Cmd+Q) and relaunch. After relaunching, retry the resource creation.`;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               console.error(`[create_service_provider] Rediscovery failed:`, err);
@@ -358,7 +431,7 @@ export async function startServer(
               uri: spURI,
               title: spArgs.title,
               slug: spArgs.slug,
-              toolCount: allTools.length,
+              toolCount: runtime.tools.length,
               message: `ServiceProvider "${spArgs.title}" created at ${spURI}. ${rediscoverStatus}`,
             });
             break;
@@ -367,20 +440,20 @@ export async function startServer(
             result = await handleGetResource(context as any, args as { uri: string });
             break;
           case 'update_resource':
-            result = await handleUpdateResource(context as any, discovery, args as { uri: string; properties: Record<string, unknown> });
+            result = await handleUpdateResource(context as any, runtime.discovery, args as { uri: string; properties: Record<string, unknown> });
             break;
           case 'delete_resource':
             result = await handleDeleteResource(context as any, args as { uri: string });
             break;
           case 'list_resource_types':
-            result = handleListResourceTypes(context as any, discovery);
+            result = handleListResourceTypes(context as any, runtime.discovery);
             break;
           case 'query_resources':
             result = await handleQueryResources(context as any, args as { queryBase: string; filter?: string; select?: string; orderBy?: string });
             break;
           case 'read_catalog': {
             const catalogHeader = `**Server:** ${context.serverName}\n**Base URL:** ${context.serverBase}\n\n`;
-            result = catalogHeader + discovery.catalogContent;
+            result = catalogHeader + runtime.discovery.catalogContent;
             break;
           }
           case 'read_service_provider': {
@@ -420,7 +493,7 @@ export async function startServer(
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-    resources: mcpResources.map((r) => ({
+    resources: runtimes.flatMap((rt) => rt.resources).map((r) => ({
       uri: r.uri,
       name: r.name,
       description: r.description,
@@ -429,7 +502,9 @@ export async function startServer(
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    const resource = mcpResources.find((r) => r.uri === request.params.uri);
+    const resource = runtimes
+      .flatMap((rt) => rt.resources)
+      .find((r) => r.uri === request.params.uri);
     if (!resource) {
       throw new Error(`Unknown resource: ${request.params.uri}`);
     }

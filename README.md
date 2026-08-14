@@ -23,20 +23,79 @@ npm run build
 
 ## Configuration
 
-The server accepts configuration via CLI arguments or environment variables (CLI overrides env):
+Two ways: a **configuration file** (needed for more than one server, for scoping to specific project areas, and for an OSLC configuration context), or **CLI arguments** for a single unscoped server.
+
+### CLI arguments
+
+CLI overrides environment variables.
 
 | CLI Argument | Environment Variable | Description |
 |-------------|---------------------|-------------|
-| `--server <url>` | `OSLC_SERVER_URL` | **Required.** Base URL of the OSLC server |
-| `--catalog <url>` | `OSLC_CATALOG_URL` | Catalog URL (defaults to `{server}/oslc/catalog`) |
+| `--config <path>` | `OSLC_CONFIG_FILE` | Configuration file (see below). Supersedes the flags below |
+| `--server <url>` | `OSLC_SERVER_URL` | **Required unless `--config` is given.** Base URL of the OSLC server |
+| `--catalog <url>` | `OSLC_CATALOG_URL` | Catalog URL. Discovered when omitted (see *Catalog resolution*) |
 | `--username <user>` | `OSLC_USERNAME` | Username for authenticated servers |
 | `--password <pass>` | `OSLC_PASSWORD` | Password for authenticated servers |
+| `--configuration-context <uri>` | `OSLC_CONFIGURATION_CONTEXT` | OSLC `Configuration-Context` URI |
+
+### Configuration file
+
+Copy [`oslc-mcp-server.example.yaml`](oslc-mcp-server.example.yaml) to `oslc-mcp-server.yaml` and edit. **The real file is git-ignored** — it names a specific deployment and may carry credentials; only the example is committed.
+
+```yaml
+servers:
+  - alias: dng                                   # required, unique
+    baseUrl: https://elm.example.com/rm          # required
+    catalogUrl: https://…/oslc_rm/catalog        # optional — discovered when omitted
+    configurationContext: https://…/gc/configuration/17   # optional
+    credentials:                                 # optional
+      usernameEnv: ELM_USER
+      passwordEnv: ELM_PASSWORD
+    serviceProviders:                            # optional — omit to walk the catalog
+      - uri: https://…/oslc_rm/_ID/services.xml  # required within the list
+        alias: requirements                      # optional
+        configurationContext: https://…/gc/configuration/17   # optional
+```
+
+| Field | Required | Default |
+|---|---|---|
+| `alias` | yes | — must be unique across servers |
+| `baseUrl` | yes | — |
+| `catalogUrl` | no | discovered from `rootservices`, else `${baseUrl}/oslc/catalog` |
+| `configurationContext` | no | none. Fallback for the server's service providers |
+| `credentials` | no | unauthenticated |
+| `serviceProviders` | no | absent means walk the whole catalog |
+| `serviceProviders[].uri` | yes, within the list | — |
+| `serviceProviders[].alias` | no | — |
+| `serviceProviders[].configurationContext` | no | the server's value |
+
+**Credentials.** Prefer `usernameEnv` / `passwordEnv`, which name environment variables:
+
+```yaml
+    credentials:
+      usernameEnv: ELM_USER
+      passwordEnv: ELM_PASSWORD
+```
+
+Literal `username` / `password` also work, and emit one warning at load naming the server. The file is git-ignored, but it still travels in pastes, backups and screen shares — so environment references remain the better default. When both forms are present the environment references win, so an operator can override without editing the file. A half-specified `credentials` block (say `username` with no `password`) is an error rather than a warning, since that is a typo rather than a choice.
+
+**Scoping discovery.** `serviceProviders` restricts startup to the listed providers and **the catalog is never fetched**. This matters because on an ELM application **one service provider is one project area**, and a production server may have thousands — an unscoped startup would crawl every one. Omit the list and the catalog is walked as before.
+
+**Catalog resolution**, in order: an explicit `catalogUrl` wins; otherwise `${baseUrl}/rootservices` is read and the domain's service-providers predicate used (`oslc_rm:rmServiceProviders`, `oslc_qm:qmServiceProviders`, `oslc_cm:cmServiceProviders`, `oslc_am:amServiceProviders`); otherwise `${baseUrl}/oslc/catalog`. An application may advertise several catalogs, so selection is by domain predicate rather than by taking the first found — and note the `${baseUrl}/oslc/catalog` convention matches no ELM application, which is why discovery exists.
+
+**Configuration context.** Required against configuration-enabled ELM project areas, where a request without one cannot say which stream or baseline it applies to. A service provider's value overrides its server's.
+
+**Tool naming.** With one server, tool names are unprefixed (`create_requirement`) exactly as before. With several, each is prefixed by its server alias (`dng_create_requirement`, `etm_create_testcase`), and the `oslc://catalog` MCP resource becomes `oslc://<alias>/catalog`.
 
 ## Running
 
-Start your OSLC server first, then:
+Start your OSLC server first, then either:
 
 ```bash
+# Configuration file — several servers, scoped to specific project areas
+node dist/index.js --config ./oslc-mcp-server.yaml
+
+# Or a single unscoped server
 node dist/index.js --server http://localhost:3002 --catalog http://localhost:3002/oslc
 ```
 
