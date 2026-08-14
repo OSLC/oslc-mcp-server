@@ -9,15 +9,21 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watchAll",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "oslc-client": "file:../oslc-client",
-    "oslc-service": "*"
+    "oslc-service": "*",
+    "yaml": "^2.5.1"
   },
   "devDependencies": {
+    "@jest/globals": "^29.7.0",
     "@types/node": "^22.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "typescript": "~5.8.3"
   }
 }
