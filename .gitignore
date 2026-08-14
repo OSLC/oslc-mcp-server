@@ -1,2 +1,6 @@
 dist/
 node_modules/
+
+# Real oslc-mcp-server configuration names a specific deployment and may
+# carry literal credentials. The committed example is *.example.yaml.
+oslc-mcp-server.yaml
