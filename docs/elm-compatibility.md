@@ -72,25 +72,52 @@ EWM          /ccm/oslc/contexts/<id>/workitems/services.xml
 
 Resolving a stream or baseline URI to use as a `Configuration-Context` was not achieved by API alone; the component picker in the web UI remains the practical route.
 
-### 6. Query capability is advertised, but its actual behaviour is not
+### 6. Query capability is advertised, but its actual behaviour is not — **and one server silently ignores `oslc.where`**
 
 An `oslc:QueryCapability` declares `oslc:queryBase` and `oslc:resourceType`, and sometimes `oslc:resourceShape`. It declares nothing about which `oslc.where` operators work, whether `oslc.select` supports nesting, whether `oslc.orderBy` is honoured, whether `oslc.searchTerms` exists, or how paging behaves.
 
-**The failure mode to fear is a parameter that is accepted and ignored.** A `400` is recoverable — a client sees the error and adapts. A server that ignores `oslc.where` and returns the entire collection looks like a successful query, and any consumer reasoning over the result is confidently wrong.
+Measured on the same deployment, with an `oslc.where` chosen to match **nothing**:
+
+| Application | Query capabilities advertised | Unfiltered query | `oslc.where` that matches nothing |
+|---|---|---|---|
+| EWM | 2 | ✅ Returns work items | ❌ `400` — `oslc:Error … "Cannot reconstruct value"` |
+| DOORS Next | 8 | ✅ Returns members | ⚠️ **`200`, and the same members as unfiltered** |
+| ETM | **0** | — | — |
+
+**DOORS Next accepts the filter and ignores it.** A query that should return nothing returns the entire collection, with a success status. Nothing in the response says the filter was discarded.
+
+This is the failure mode to fear. A `400` is recoverable — a client sees the error and adapts. A silently ignored filter looks like a successful query, and any consumer reasoning over the result is **confidently wrong**. An assistant asking "which requirements have no test coverage?" would get every requirement back and report accordingly.
+
+**How to detect it:** never trust a filter's status code. Establish an unfiltered baseline count, then issue a filter that cannot match, and compare. If the counts are equal, the parameter was ignored.
+
+**ETM advertises no query capabilities at all**, so its resources cannot be found by OSLC query on this deployment — only by direct `GET` of a known URI, or through another application's links.
 
 Tracked as [#1](https://github.com/OSLC/oslc-mcp-server/issues/1): probe each query capability, record `supported` / `unsupported` / **`ignored`**, and surface the answer where the caller will see it.
 
-### 7. A `rootservices` document may not parse
+### 7. A query base may already carry query parameters
+
+DOORS Next advertises query bases such as `…/views_oslc/query?componentURI=…`. A client that appends `?oslc.where=…` produces a URL with two `?`, which the server **accepts and silently mishandles** rather than rejecting. Append with `&` when the base already contains a `?`.
+
+(This was a bug in this MCP server, fixed — but it is worth knowing generally, because the symptom is a query that appears to succeed.)
+
+### 8. A `rootservices` document may not parse
 
 One OSLC server encountered serves `rootservices` as SPARQL-style Turtle (`PREFIX` rather than `@prefix`), which a standards-compliant Turtle parser rejects. If your client swallows parse errors and returns an empty graph — many do — this presents as a document with no predicates rather than as an error.
 
 Falling back to the `${baseUrl}/oslc/catalog` convention when no catalog predicate is found handles this gracefully.
 
+### 9. No per-type `query_<type>` tools are generated for any application
+
+Discovery finds query capabilities — 8 in DOORS Next, 2 in EWM — but tool generation produces only `create_*` tools from creation factories. Querying is therefore possible only through the generic `query_resources` tool, which requires the caller to supply a `queryBase` URI it has no way to discover from the tool schema alone.
+
+Generated tool names also derive from factory *titles* rather than resource types, which produces names like `create_location_for_creation_of_defect_change_requests_` — hard for a language model to select correctly.
+
 ---
 
 ## Still unknown
 
-- **DOORS Next generates far fewer tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
+- **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
+- **Whether create, update and delete actually work.** `list_resource_types` and unfiltered query are confirmed against all applications that support them; the write path has not been exercised.
 - **Configuration-context behaviour** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
 - **Whether creation factories enforce their advertised shapes**, and which properties are genuinely writable. A factory advertises a shape; it does not advertise whether it means it.
 
