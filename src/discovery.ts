@@ -1,5 +1,9 @@
 import { OSLCClient, OSLCResource } from 'oslc-client';
-import { Namespace, type NamedNode } from 'rdflib';
+// rdflib is CommonJS. Import the default and destructure rather than using
+// named imports: Node and tsc accept either, but Jest's ESM linker cannot
+// take named exports from a CJS module, which would make every module that
+// imports rdflib untestable.
+import rdflib, { type NamedNode } from 'rdflib';
 import type {
   DiscoveryResult,
   DiscoveredServiceProvider,
@@ -14,6 +18,8 @@ import {
   formatVocabularyContent,
 } from 'oslc-service/mcp';
 import type { ServerConfig } from './server-config.js';
+
+const { Namespace } = rdflib;
 
 const oslcNS = Namespace('http://open-services.net/ns/core#');
 const dctermsNS = Namespace('http://purl.org/dc/terms/');
@@ -139,6 +145,50 @@ export async function discoverServiceProvider(
     factories,
     queries,
     domains: [...domainSet],
+  };
+}
+
+/**
+ * Discover capabilities from an explicit list of service providers,
+ * without fetching the catalog.
+ *
+ * On an ELM application one service provider is one project area, and a
+ * production server may have thousands. Listing the handful actually in use
+ * turns startup from a full crawl into a bounded set of fetches. The catalog
+ * URI is still reported, because MCP resources reference it — it is simply
+ * never retrieved.
+ *
+ * A provider that fails to fetch is skipped, not fatal: one project area the
+ * user cannot read should not prevent the others being served.
+ */
+export async function discoverFromServiceProviders(
+  client: OSLCClient,
+  spURIs: string[],
+  catalogURI: string
+): Promise<DiscoveryResult> {
+  const serviceProviders: DiscoveredServiceProvider[] = [];
+  const shapes = new Map<string, DiscoveredShape>();
+
+  for (const spURI of spURIs) {
+    console.error(`[discovery] Fetching scoped service provider: ${spURI}`);
+    const sp = await discoverServiceProvider(client, spURI, shapes);
+    if (sp) serviceProviders.push(sp);
+  }
+
+  console.error(
+    `[discovery] Scoped discovery complete: ${serviceProviders.length}/${spURIs.length} providers, ` +
+    `${serviceProviders.reduce((n, sp) => n + sp.factories.length, 0)} factories, ` +
+    `${shapes.size} shapes (catalog not fetched)`
+  );
+
+  return {
+    catalogURI,
+    supportsJsonLd: false,
+    serviceProviders,
+    shapes,
+    vocabularyContent: formatVocabularyContent(serviceProviders, shapes),
+    catalogContent: formatCatalogContent(serviceProviders),
+    shapesContent: formatShapesContent(shapes),
   };
 }
 

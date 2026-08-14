@@ -7,7 +7,8 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { OSLCClient } from 'oslc-client';
-import { serialize as rdfSerialize } from 'rdflib';
+// rdflib is CommonJS — default import, not named. See the note in discovery.ts.
+import rdflib from 'rdflib';
 import type {
   DiscoveryResult,
   McpToolDefinition,
@@ -27,6 +28,8 @@ import {
 import type { GeneratedTool } from 'oslc-service/mcp';
 import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
+
+const { serialize: rdfSerialize } = rdflib;
 
 /**
  * HTTP-based MCP context adapter that wraps OSLCClient for the generic handlers.
