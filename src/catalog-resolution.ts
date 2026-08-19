@@ -12,12 +12,31 @@ const { Namespace } = rdflib;
  * application advertises its own plus automation, change management and
  * configuration — so selection is by domain predicate, never by taking the
  * first catalog found.
+ *
+ * Both namespace generations are listed. The `xmlns/<domain>/1.0/` forms are
+ * what ELM emits; the `ns/<domain>#` forms are OSLC 3.0, and are what the
+ * servers in this workspace emit. A server advertising only the newer form
+ * would otherwise fall through to the convention, which is a different URL
+ * and usually the wrong one.
+ *
+ * Deliberately absent: `http://open-services.net/ns/config#cmServiceProviders`.
+ * Its local name collides with change management's, but `config`'s `cm` is
+ * *configuration* management — a catalog of configurations, not of artifact
+ * service providers. Matching it would silently point discovery at the wrong
+ * catalog, and the collision makes that easy to do by accident.
  */
 const CATALOG_PREDICATES = [
   'http://open-services.net/xmlns/rm/1.0/rmServiceProviders',
   'http://open-services.net/xmlns/qm/1.0/qmServiceProviders',
   'http://open-services.net/xmlns/cm/1.0/cmServiceProviders',
   'http://open-services.net/xmlns/am/1.0/amServiceProviders',
+  'http://open-services.net/ns/rm#rmServiceProviders',
+  'http://open-services.net/ns/qm#qmServiceProviders',
+  'http://open-services.net/ns/cm#cmServiceProviders',
+  'http://open-services.net/ns/am#amServiceProviders',
+  // Last: OSLC Core's generic catalog reference. It names no domain, so it is
+  // only right when no domain-specific predicate answered.
+  'http://open-services.net/ns/core#serviceProviderCatalog',
 ];
 
 /**
