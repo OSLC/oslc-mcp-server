@@ -30,6 +30,7 @@ import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
 import { describeDiscovery } from './describe-discovery.js';
+import { checkTurtleSupport, formatTurtleCheck, type HttpGetter } from './representation.js';
 
 const { serialize: rdfSerialize } = rdflib;
 
@@ -175,6 +176,21 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
     description:
       'Report what OSLC discovery found for this server and which URL each generated tool will actually hit: the catalog URL and how it was resolved, every service provider, every creation factory and query capability, and every resource shape that failed to fetch. Read-only — makes no requests. Use it when a tool is missing or appears to reach the wrong place.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'check_turtle_support',
+    description:
+      'Ask this server for Turtle and report what it returned: Turtle that parses, an error status, another representation, or a body typed as Turtle that does not parse. Records the full HTTP exchange as evidence. Defaults to the catalog URL. Note that a server may disregard the Accept header and still be conformant, so this reports what the server did, not what it can do.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uri: {
+          type: 'string',
+          description: "Resource to request as Turtle. Defaults to this server's catalog URL.",
+        },
+      },
+      required: [],
+    },
   },
   {
     name: 'get_resource',
@@ -468,6 +484,13 @@ export async function startServer(servers: StartedServer[]): Promise<void> {
               discovery: runtime.discovery,
             });
             break;
+          case 'check_turtle_support': {
+            const turtleArgs = (args ?? {}) as { uri?: string };
+            const target = turtleArgs.uri || config.catalogURL;
+            const axiosClient = (client as any).client as HttpGetter;
+            result = formatTurtleCheck(await checkTurtleSupport(axiosClient, target));
+            break;
+          }
           case 'list_resource_types':
             result = handleListResourceTypes(context as any, runtime.discovery);
             break;
