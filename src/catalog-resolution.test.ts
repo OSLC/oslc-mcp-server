@@ -37,25 +37,30 @@ describe('resolveCatalogUrl', () => {
     });
   });
 
-  it('falls back to the convention when rootservices advertises no catalog', async () => {
-    const resolved = await resolveCatalogUrl(stubClient('http://example.com/unrelated'), BASE, undefined);
-    expect(resolved).toEqual({
-      url: `${BASE}/oslc/catalog`,
-      source: { kind: 'convention', reason: 'no-catalog-predicate' },
-    });
+  it('refuses to invent a catalog URL when rootservices advertises none', async () => {
+    // A guessed URL usually exists, so the mistake surfaces later as a 401 or
+    // 404 on something that was never the catalog. Fail here, where the cause
+    // is still visible.
+    await expect(resolveCatalogUrl(stubClient('http://example.com/unrelated'), BASE, undefined))
+      .rejects.toThrow(/advertises no service provider catalog/);
   });
 
-  it('distinguishes an unreachable rootservices from one that advertised nothing', async () => {
-    const resolved = await resolveCatalogUrl(stubClient(undefined), BASE, undefined);
-    expect(resolved).toEqual({
-      url: `${BASE}/oslc/catalog`,
-      source: { kind: 'convention', reason: 'rootservices-unreachable' },
-    });
+  it('names catalogUrl as the fix when nothing is advertised', async () => {
+    await expect(resolveCatalogUrl(stubClient('http://example.com/unrelated'), BASE, undefined))
+      .rejects.toThrow(/catalogUrl/);
   });
 
-  it('does not double a trailing slash on the base URL', async () => {
-    const resolved = await resolveCatalogUrl(stubClient(undefined), `${BASE}/`, undefined);
-    expect(resolved.url).toBe(`${BASE}/oslc/catalog`);
+  it('fails clearly when rootservices itself cannot be read', async () => {
+    // rootservices is unauthenticated by design — it is how discovery boots
+    // and how a client learns the URLs it needs to authenticate.
+    await expect(resolveCatalogUrl(stubClient(undefined), BASE, undefined))
+      .rejects.toThrow(/Cannot read .*rootservices/);
+  });
+
+  it('does not double a trailing slash when building the rootservices URL', async () => {
+    const client = stubClient(RM_PREDICATE);
+    await resolveCatalogUrl(client, `${BASE}/`, undefined);
+    expect(client.getResource).toHaveBeenCalledWith(ROOTSERVICES, '2.0', expect.any(String));
   });
 
   it('resolves an OSLC 3.0 namespace predicate, not only the ELM 1.0 form', async () => {
@@ -72,12 +77,14 @@ describe('resolveCatalogUrl', () => {
     expect(resolved.source).toEqual({ kind: 'rootservices', predicate: CORE });
   });
 
-  it("never treats the configuration catalog as a domain catalog", async () => {
-    // ns/config#cmServiceProviders shares a local name with change
-    // management's, but points at configurations, not service providers.
+  it("never treats the configuration catalog as a service provider catalog", async () => {
+    // oslc_config:cmServiceProviders (ns/config#) is a catalog of
+    // configurations. oslc_cm: (ns/cm#) is change management. Distinct
+    // namespaces, matched on full URI — this one is simply not a domain
+    // catalog, so nothing here should resolve to it.
     const CONFIG = 'http://open-services.net/ns/config#cmServiceProviders';
-    const resolved = await resolveCatalogUrl(stubClient(CONFIG), BASE, undefined);
-    expect(resolved.source.kind).toBe('convention');
+    await expect(resolveCatalogUrl(stubClient(CONFIG), BASE, undefined))
+      .rejects.toThrow(/advertises no service provider catalog/);
   });
 
   it('prefers a domain predicate over the generic one when both are present', async () => {

@@ -20,10 +20,11 @@ const { Namespace } = rdflib;
  * and usually the wrong one.
  *
  * Deliberately absent: `http://open-services.net/ns/config#cmServiceProviders`.
- * Its local name collides with change management's, but `config`'s `cm` is
- * *configuration* management — a catalog of configurations, not of artifact
- * service providers. Matching it would silently point discovery at the wrong
- * catalog, and the collision makes that easy to do by accident.
+ * There is no ambiguity in the RDF — change management is `ns/cm#` and
+ * configuration management is `ns/config#`, conventionally prefixed
+ * `oslc_cm:` and `oslc_config:`, and matching is on the full URI. It is
+ * excluded because it is a different kind of catalog: configurations, not
+ * artifact service providers. A server may well advertise both.
  */
 const CATALOG_PREDICATES = [
   'http://open-services.net/xmlns/rm/1.0/rmServiceProviders',
@@ -46,8 +47,7 @@ const CATALOG_PREDICATES = [
  */
 export type CatalogSource =
   | { kind: 'explicit' }
-  | { kind: 'rootservices'; predicate: string }
-  | { kind: 'convention'; reason: 'no-catalog-predicate' | 'rootservices-unreachable' };
+  | { kind: 'rootservices'; predicate: string };
 
 export interface CatalogResolution {
   url: string;
@@ -55,15 +55,19 @@ export interface CatalogResolution {
 }
 
 /**
- * Resolve a server's catalog URL:
- *   1. an explicit value always wins;
- *   2. otherwise read ${baseUrl}/rootservices and take the first domain
- *      catalog predicate present;
- *   3. otherwise fall back to ${baseUrl}/oslc/catalog, which is this
- *      workspace's convention and preserves the previous behaviour.
+ * Resolve a server's catalog URL: an explicit value if configured, otherwise
+ * whatever `${baseUrl}/rootservices` advertises.
  *
- * The `${baseUrl}/oslc/catalog` convention matches no ELM application, which
- * is why step 2 exists.
+ * There is no third option, deliberately. A catalog URL is not something a
+ * client may assume the shape of — that is the point of `rootservices`, which
+ * is unauthenticated precisely so discovery can bootstrap from it and find the
+ * URLs needed to authenticate. Guessing a conventional path instead is bad
+ * REST practice, and it fails in the worst way: the guess is a URL that
+ * exists, so the error surfaces later as a 401 or a 404 on something that was
+ * never the catalog, with nothing to indicate the address was invented.
+ *
+ * So when rootservices advertises no catalog, this throws and says what to
+ * configure, rather than proceeding on a fabricated URL.
  */
 export async function resolveCatalogUrl(
   client: OSLCClient,
@@ -74,25 +78,31 @@ export async function resolveCatalogUrl(
 
   const base = baseUrl.replace(/\/$/, '');
   const rootservices = `${base}/rootservices`;
-  const convention = `${base}/oslc/catalog`;
 
+  let resource;
   try {
-    const resource = await client.getResource(rootservices, '2.0', ACCEPT_RDF);
-    const store = resource.store;
-    const subject = store.sym(rootservices);
-    for (const predicate of CATALOG_PREDICATES) {
-      const value = store.any(subject, store.sym(predicate), null);
-      if (value?.value) {
-        console.error(`[startup] catalog from rootservices: ${value.value}`);
-        return { url: value.value, source: { kind: 'rootservices', predicate } };
-      }
-    }
-    console.error(
-      `[startup] ${rootservices} advertised no catalog predicate; using convention`
+    resource = await client.getResource(rootservices, '2.0', ACCEPT_RDF);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Cannot read ${rootservices} (${reason}). It is the unauthenticated entry point for OSLC ` +
+      `discovery, so it must be reachable — or set catalogUrl for this server explicitly.`
     );
-    return { url: convention, source: { kind: 'convention', reason: 'no-catalog-predicate' } };
-  } catch {
-    console.error(`[startup] no rootservices at ${rootservices}; using convention`);
-    return { url: convention, source: { kind: 'convention', reason: 'rootservices-unreachable' } };
   }
+
+  const store = resource.store;
+  const subject = store.sym(rootservices);
+  for (const predicate of CATALOG_PREDICATES) {
+    const value = store.any(subject, store.sym(predicate), null);
+    if (value?.value) {
+      console.error(`[startup] catalog from rootservices: ${value.value} (${predicate})`);
+      return { url: value.value, source: { kind: 'rootservices', predicate } };
+    }
+  }
+
+  throw new Error(
+    `${rootservices} advertises no service provider catalog this client recognises. ` +
+    `Set catalogUrl for this server explicitly, or have the server advertise one of: ` +
+    `${CATALOG_PREDICATES.join(', ')}`
+  );
 }

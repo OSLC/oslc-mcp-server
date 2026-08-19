@@ -31,8 +31,6 @@ function describeCatalogSource(catalog: CatalogResolution): string {
       return 'explicit configuration';
     case 'rootservices':
       return `rootservices predicate ${catalog.source.predicate}`;
-    case 'convention':
-      return `fallback convention (${catalog.source.reason})`;
   }
 }
 

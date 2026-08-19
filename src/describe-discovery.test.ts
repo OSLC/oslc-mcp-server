@@ -55,17 +55,19 @@ describe('describeDiscovery', () => {
     expect(text).toContain('rmServiceProviders');
   });
 
-  it('distinguishes the fallback convention from a server-advertised catalog', () => {
+  it('distinguishes a configured catalog from a discovered one', () => {
+    // The two are very different situations: a configured URL is the
+    // operator's assertion, a discovered one is the server's.
     const text = describeDiscovery({
       ...base,
       catalog: {
-        url: 'https://elm.example.com/rm/oslc/catalog',
-        source: { kind: 'convention', reason: 'rootservices-unreachable' },
+        url: 'https://elm.example.com/rm/configured-catalog',
+        source: { kind: 'explicit' },
       },
       discovery: discoveryWith(),
     });
-    expect(text).toContain('convention');
-    expect(text).toContain('rootservices-unreachable');
+    expect(text).toContain('explicit configuration');
+    expect(text).not.toContain('rootservices predicate');
   });
 
   it('maps each generated tool name to the URL it will actually hit', () => {
