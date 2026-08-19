@@ -29,6 +29,7 @@ import type { GeneratedTool } from 'oslc-service/mcp';
 import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
+import { describeDiscovery } from './describe-discovery.js';
 
 const { serialize: rdfSerialize } = rdflib;
 
@@ -168,6 +169,12 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
       },
       required: ['title', 'slug'],
     },
+  },
+  {
+    name: 'describe_discovery',
+    description:
+      'Report what OSLC discovery found for this server and which URL each generated tool will actually hit: the catalog URL and how it was resolved, every service provider, every creation factory and query capability, and every resource shape that failed to fetch. Read-only — makes no requests. Use it when a tool is missing or appears to reach the wrong place.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'get_resource',
@@ -452,6 +459,14 @@ export async function startServer(servers: StartedServer[]): Promise<void> {
             break;
           case 'delete_resource':
             result = await handleDeleteResource(context as any, args as { uri: string });
+            break;
+          case 'describe_discovery':
+            result = describeDiscovery({
+              alias: runtime.spec.alias,
+              prefix: runtime.spec.prefix,
+              catalog: runtime.spec.catalog,
+              discovery: runtime.discovery,
+            });
             break;
           case 'list_resource_types':
             result = handleListResourceTypes(context as any, runtime.discovery);
