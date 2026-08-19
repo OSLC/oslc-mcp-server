@@ -1,6 +1,6 @@
 # Using `oslc-mcp-server` with IBM ELM
 
-Findings from running `oslc-mcp-server` against an **IBM ELM 7.x** deployment — DOORS Next (`/rm`), ETM (`/qm`) and EWM (`/ccm`) — in August 2026.
+Findings from running `oslc-mcp-server` against an **IBM ELM 7.1 SR1** deployment — DOORS Next (`/rm`), ETM (`/qm`) and EWM (`/ccm`) — in August 2026.
 
 Most of what follows is not specific to this MCP server. It is how ELM behaves as an OSLC provider, and several of the quirks below cost real time to diagnose because **they fail silently rather than with an error**. Published in the hope it saves someone else that time.
 
@@ -19,9 +19,9 @@ Most of what follows is not specific to this MCP server. It is how ELM behaves a
 
 ## Quirks, and how they present
 
-### 1. `OSLC-Core-Version: 3.0` does not exist — and sending it silently breaks EWM
+### 1. `OSLC-Core-Version: 2.0` is a required header, EWM will default to OSLC 1.0 if the header is not present or does not have value 2.0.
 
-**There is no `3.0` value for this header.** OSLC Core 3.0 retains `2.0`. Sending `3.0` is not a version choice, it is a malformed request — and ELM applications do not agree on how to treat it.
+Note: **There is no `3.0` value for this header.** OSLC Core 3.0 retains `2.0`. 
 
 Against EWM's work-item service provider, `3.0` returns **a different document**:
 
@@ -36,9 +36,9 @@ DOORS Next returns byte-identical documents for both values, which is what makes
 
 **Always send `OSLC-Core-Version: 2.0`.**
 
-### 2. The catalog is not at `${baseUrl}/oslc/catalog`
+### 2. There is no single rootservices property for the service provider catalog 
 
-That convention matches **no** ELM application. Read `${baseUrl}/rootservices` and take the domain's service-providers predicate:
+Each ELM server uses specific namespaces and properties to define the OSLC service provider catalog, there is no single property that can be relied upon. 
 
 | Application | Predicate | Catalog |
 |---|---|---|
@@ -53,6 +53,8 @@ That convention matches **no** ELM application. Read `${baseUrl}/rootservices` a
 On the deployment tested, **each of the three catalogs listed 306 service providers**. A client that walks the catalog at startup fetches 306 service provider documents plus every shape each references, per application.
 
 This is why scoping matters: name the few project areas you actually use and skip the catalog entirely. It is the difference between a startup measured in seconds and one that may not finish usefully at all.
+
+Applications need to be prepared to read a lot of service providers, or scope thier discovery to a set of service providers.
 
 ### 4. Service provider URI shapes differ between applications of the same product
 
@@ -74,7 +76,7 @@ Resolving a stream or baseline URI to use as a `Configuration-Context` was not a
 
 ### 6. Query capability is advertised, but its actual behaviour is not
 
-An `oslc:QueryCapability` declares `oslc:queryBase` and `oslc:resourceType`, and sometimes `oslc:resourceShape`. It declares nothing about which `oslc.where` operators work, whether `oslc.select` supports nesting, whether `oslc.orderBy` is honoured, whether `oslc.searchTerms` exists, or how paging behaves.
+An `oslc:QueryCapability` declares `oslc:queryBase` and `oslc:resourceType`, and sometimes `oslc:resourceShape`. It declares nothing about which `oslc.where` operators work, whether `oslc.select` supports nesting, whether `oslc.orderBy` is honored, whether `oslc.searchTerms` exists, or how paging behaves.
 
 Measured on one deployment, with an `oslc.where` chosen to match **nothing**:
 
@@ -108,6 +110,8 @@ One OSLC server encountered serves `rootservices` as SPARQL-style Turtle (`PREFI
 
 Falling back to the `${baseUrl}/oslc/catalog` convention when no catalog predicate is found handles this gracefully.
 
+This is a generic-framework error in how it produces the Turtle representation of its rootservices document. For ELM applications, it's best to use Accept=application/rdf+xml, many do not support Turtle at all. 
+
 ### 9. No per-type `query_<type>` tools are generated for any application
 
 Discovery finds query capabilities — 8 in DOORS Next, 2 in EWM — but tool generation produces only `create_*` tools from creation factories. Querying is therefore possible only through the generic `query_resources` tool, which requires the caller to supply a `queryBase` URI it has no way to discover from the tool schema alone.
@@ -121,7 +125,7 @@ Generated tool names also derive from factory *titles* rather than resource type
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
 - **Whether create, update and delete actually work.** `list_resource_types` and unfiltered query are confirmed against all applications that support them; the write path has not been exercised.
 - **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
-- **Configuration-context behaviour** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
+- **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
 - **Whether creation factories enforce their advertised shapes**, and which properties are genuinely writable. A factory advertises a shape; it does not advertise whether it means it.
 
 ---
