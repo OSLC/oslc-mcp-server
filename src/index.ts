@@ -108,10 +108,11 @@ async function main(): Promise<void> {
     );
 
     // Explicit value, else rootservices, else the convention.
-    config.catalogURL = await resolveCatalogUrl(
+    const catalog = await resolveCatalogUrl(
       client, config.serverURL, config.catalogURL || undefined
     );
-    console.error(`[startup] ${alias}: catalog ${config.catalogURL}`);
+    config.catalogURL = catalog.url;
+    console.error(`[startup] ${alias}: catalog ${catalog.url} (${catalog.source.kind})`);
 
     const discovery = serviceProviderURIs.length > 0
       ? await discoverFromServiceProviders(client, serviceProviderURIs, config.catalogURL)
@@ -122,6 +123,7 @@ async function main(): Promise<void> {
       client,
       discovery,
       config,
+      catalog,
       prefix: prefixTools ? `${alias}_` : '',
     });
   }

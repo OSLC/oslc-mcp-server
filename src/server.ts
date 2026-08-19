@@ -28,6 +28,7 @@ import {
 import type { GeneratedTool } from 'oslc-service/mcp';
 import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
+import type { CatalogResolution } from './catalog-resolution.js';
 
 const { serialize: rdfSerialize } = rdflib;
 
@@ -280,6 +281,8 @@ export interface StartedServer {
   client: OSLCClient;
   discovery: DiscoveryResult;
   config: ServerConfig;
+  /** How `config.catalogURL` was arrived at — reported by describe_discovery. */
+  catalog: CatalogResolution;
   /** '' for a single server; `${alias}_` when several are configured. */
   prefix: string;
 }

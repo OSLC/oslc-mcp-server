@@ -21,6 +21,21 @@ const CATALOG_PREDICATES = [
 ];
 
 /**
+ * How a catalog URL was arrived at. `describe_discovery` reports it, because
+ * a catalog reached by the fallback convention and one advertised by the
+ * server are very different situations that look identical downstream.
+ */
+export type CatalogSource =
+  | { kind: 'explicit' }
+  | { kind: 'rootservices'; predicate: string }
+  | { kind: 'convention'; reason: 'no-catalog-predicate' | 'rootservices-unreachable' };
+
+export interface CatalogResolution {
+  url: string;
+  source: CatalogSource;
+}
+
+/**
  * Resolve a server's catalog URL:
  *   1. an explicit value always wins;
  *   2. otherwise read ${baseUrl}/rootservices and take the first domain
@@ -35,11 +50,12 @@ export async function resolveCatalogUrl(
   client: OSLCClient,
   baseUrl: string,
   explicit?: string
-): Promise<string> {
-  if (explicit) return explicit;
+): Promise<CatalogResolution> {
+  if (explicit) return { url: explicit, source: { kind: 'explicit' } };
 
   const base = baseUrl.replace(/\/$/, '');
   const rootservices = `${base}/rootservices`;
+  const convention = `${base}/oslc/catalog`;
 
   try {
     const resource = await client.getResource(rootservices, '2.0', ACCEPT_RDF);
@@ -49,15 +65,15 @@ export async function resolveCatalogUrl(
       const value = store.any(subject, store.sym(predicate), null);
       if (value?.value) {
         console.error(`[startup] catalog from rootservices: ${value.value}`);
-        return value.value;
+        return { url: value.value, source: { kind: 'rootservices', predicate } };
       }
     }
     console.error(
       `[startup] ${rootservices} advertised no catalog predicate; using convention`
     );
+    return { url: convention, source: { kind: 'convention', reason: 'no-catalog-predicate' } };
   } catch {
     console.error(`[startup] no rootservices at ${rootservices}; using convention`);
+    return { url: convention, source: { kind: 'convention', reason: 'rootservices-unreachable' } };
   }
-
-  return `${base}/oslc/catalog`;
 }
