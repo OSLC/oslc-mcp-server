@@ -25,13 +25,20 @@ const oslcNS = Namespace('http://open-services.net/ns/core#');
 const dctermsNS = Namespace('http://purl.org/dc/terms/');
 
 /**
- * Multi-format Accept header for OSLC GETs. Servers vary in which RDF
- * serializations they support; some only emit application/rdf+xml. Send
- * a quality-weighted list and let `OSLCClient.getResource` parse whatever
- * the server returns. (rdflib handles all three formats.)
+ * Multi-format Accept header for OSLC GETs.
+ *
+ * RDF/XML comes first deliberately. OSLC 3.0 promotes Turtle, but many ELM
+ * applications do not produce it at all — so asking for Turtle first means a
+ * parse failure or an empty graph cannot be told apart from a format the
+ * server never supported. Turtle and JSON-LD stay in the list at lower
+ * quality; `OSLCClient.getResource` parses whatever comes back, and rdflib
+ * handles all three.
+ *
+ * This is a blunt instrument: one global constant standing in for a
+ * per-server fact. `check_turtle_support` measures that fact per server.
  */
 export const ACCEPT_RDF =
-  'text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8';
+  'application/rdf+xml, text/turtle;q=0.9, application/ld+json;q=0.8';
 
 /**
  * Parse a shape from an OSLCResource (HTTP-fetched) into a DiscoveredShape.

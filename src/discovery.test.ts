@@ -2,7 +2,7 @@ import { describe, it, expect, jest } from '@jest/globals';
 // rdflib is CommonJS; jest's ESM linker will not destructure its named
 // exports, so take the default and destructure here.
 import rdflib from 'rdflib';
-import { discoverFromServiceProviders } from './discovery.js';
+import { discoverFromServiceProviders, ACCEPT_RDF } from './discovery.js';
 
 const { graph, sym, lit, st, Namespace } = rdflib as any;
 const dcterms = Namespace('http://purl.org/dc/terms/');
@@ -52,5 +52,26 @@ describe('discoverFromServiceProviders', () => {
     const client = stubClient(fetched, (uri) => uri.endsWith('/2'));
     const result = await discoverFromServiceProviders(client, [SP1, SP2], CATALOG);
     expect(result.serviceProviders).toHaveLength(1);
+  });
+});
+
+describe('ACCEPT_RDF', () => {
+  /** Media types in preference order, quality values stripped. */
+  function mediaTypes(header: string): string[] {
+    return header.split(',').map((part) => part.trim().split(';')[0]);
+  }
+
+  it('asks for application/rdf+xml first', () => {
+    // Many ELM applications do not produce Turtle at all. Asking for it first
+    // means a parse failure cannot be told apart from an unsupported format.
+    expect(mediaTypes(ACCEPT_RDF)[0]).toBe('application/rdf+xml');
+  });
+
+  it('still offers turtle and json-ld, at lower quality', () => {
+    const types = mediaTypes(ACCEPT_RDF);
+    expect(types).toContain('text/turtle');
+    expect(types).toContain('application/ld+json');
+    expect(ACCEPT_RDF).toMatch(/text\/turtle;q=0\.9/);
+    expect(ACCEPT_RDF).toMatch(/application\/ld\+json;q=0\.8/);
   });
 });
