@@ -75,3 +75,54 @@ describe('ACCEPT_RDF', () => {
     expect(ACCEPT_RDF).toMatch(/application\/ld\+json;q=0\.8/);
   });
 });
+
+describe('failed shape fetches', () => {
+  const SP = 'https://elm.example.com/rm/sp/1';
+  const SHAPE = 'https://elm.example.com/rm/shapes/requirement#Shape';
+
+  /**
+   * A client whose service provider advertises one factory with a shape, and
+   * whose shape document fetch always fails. Mirrors the real failure: the
+   * SP resource parses fine, the shape behind it does not resolve.
+   */
+  function clientWithUnfetchableShape() {
+    const oslc = Namespace('http://open-services.net/ns/core#');
+    return {
+      getResource: jest.fn(async (uri: string) => {
+        if (uri.startsWith('https://elm.example.com/rm/shapes/')) {
+          throw new Error('403 Forbidden');
+        }
+        const store = graph();
+        const service = sym(`${uri}#service`);
+        const factory = sym(`${uri}#factory`);
+        store.add(st(sym(uri), dcterms('title'), lit('Stub Provider'), sym(uri)));
+        store.add(st(sym(uri), oslc('service'), service, sym(uri)));
+        store.add(st(service, oslc('creationFactory'), factory, sym(uri)));
+        store.add(st(factory, dcterms('title'), lit('Requirement'), sym(uri)));
+        store.add(st(factory, oslc('creation'), sym(`${uri}/create`), sym(uri)));
+        store.add(st(factory, oslc('resourceShape'), sym(SHAPE), sym(uri)));
+        return { store, getURI: () => uri, etag: '' };
+      }),
+    } as any;
+  }
+
+  it('records the shape it could not fetch instead of swallowing it', async () => {
+    const result = await discoverFromServiceProviders(
+      clientWithUnfetchableShape(), [SP], 'https://elm.example.com/rm/catalog'
+    );
+    const failed = result.serviceProviders[0].failedShapes ?? [];
+    expect(failed).toHaveLength(1);
+    expect(failed[0].shapeURI).toBe(SHAPE);
+    // The fragment is stripped before fetching — the document is what failed.
+    expect(failed[0].documentURI).toBe('https://elm.example.com/rm/shapes/requirement');
+    expect(failed[0].reason).toContain('403');
+  });
+
+  it('leaves the list empty when every shape resolved', async () => {
+    const fetched: string[] = [];
+    const result = await discoverFromServiceProviders(
+      stubClient(fetched), [SP], 'https://elm.example.com/rm/catalog'
+    );
+    expect(result.serviceProviders[0].failedShapes ?? []).toEqual([]);
+  });
+});

@@ -6,6 +6,7 @@ import { OSLCClient, OSLCResource } from 'oslc-client';
 import rdflib, { type NamedNode } from 'rdflib';
 import type {
   DiscoveryResult,
+  FailedShapeFetch,
   DiscoveredServiceProvider,
   DiscoveredFactory,
   DiscoveredQuery,
@@ -82,6 +83,7 @@ export async function discoverServiceProvider(
   const spTitle = spStore.anyValue(spSym, dctermsNS('title')) ?? spURI;
 
   const factories: DiscoveredFactory[] = [];
+  const failedShapes: FailedShapeFetch[] = [];
   const queries: DiscoveredQuery[] = [];
   const domainSet = new Set<string>();
 
@@ -120,7 +122,11 @@ export async function discoverServiceProvider(
             shape = parseShape(shapeResource, shapeURI !== shapeDocURI ? shapeURI : undefined);
             sharedShapes.set(shapeURI, shape);
           } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
             console.error(`[discovery] Failed to fetch shape ${shapeURI}:`, err);
+            // Recorded rather than swallowed: generateTools emits a create
+            // tool only when a shape is present, so this is why one is missing.
+            failedShapes.push({ shapeURI, documentURI: shapeURI.split('#')[0], reason });
           }
         }
       }
@@ -152,6 +158,7 @@ export async function discoverServiceProvider(
     factories,
     queries,
     domains: [...domainSet],
+    failedShapes,
   };
 }
 
