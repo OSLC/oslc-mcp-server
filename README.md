@@ -134,12 +134,33 @@ At startup, the server:
 - `delete_resource` -- Delete a resource by URI
 - `list_resource_types` -- List all discovered resource types with their factories and properties
 - `query_resources` -- Query any resource type using a query capability URL
+- `describe_discovery` -- Report what discovery found and which URL each generated tool will actually hit: the catalog URL and how it was resolved, every service provider, every creation factory and query capability, and every resource shape that failed to fetch. Makes no requests.
+- `check_turtle_support` -- Ask the server for Turtle and report what came back, with the HTTP exchange as evidence. Defaults to the catalog URL.
 
 ### MCP Resources
 
 - `oslc://catalog` -- Service provider catalog summary (providers, factories, query capabilities)
 - `oslc://vocabulary` -- Resource types and their relationships
 - `oslc://shapes` -- Property definitions for each resource type (names, types, cardinalities)
+
+### Diagnosing a server
+
+OSLC leaves a great deal to the implementor, and provides no way for a client to discover which
+choices a server made. These two tools measure what asking cannot establish.
+
+`describe_discovery` answers "why is this tool missing, or why does it reach the wrong place?".
+Discovery turns advertisements into tools through several transformations, and a resource shape that
+fails to fetch silently removes a `create_<type>` tool -- so the list of failed shapes is usually
+where a missing tool is explained.
+
+`check_turtle_support` answers "will this server give me Turtle?". OSLC 3.0 promotes Turtle as the
+preferred representation; many ELM applications do not produce it, which is why this server asks for
+`application/rdf+xml` first.
+
+Note what this second tool can and cannot tell you. A server is permitted to disregard the `Accept`
+header and return whatever representation it chooses, so the result records only what the server did
+on that request -- never what it is able to produce. An `application/rdf+xml` response to a Turtle
+request is conformant behaviour, not a fault.
 
 ## Architecture
 
