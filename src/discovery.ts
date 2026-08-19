@@ -64,11 +64,20 @@ function parseShape(shapeResource: OSLCResource, overrideURI?: string): Discover
  *
  * `sharedShapes` is mutated as new shapes are encountered so callers
  * scanning multiple SPs can dedupe shape fetches.
+ *
+ * `sharedShapeDocs` dedupes at the granularity the network actually works at:
+ * the DOCUMENT. Many creation factories commonly name shapes that are
+ * fragments of one document (`…/BMM-Shapes#VisionShape`,
+ * `…/BMM-Shapes#GoalShape`, …). Keyed on the fragment URI alone, every factory
+ * misses the cache and re-fetches the same document — 14 requests for one
+ * document on a modest provider, each re-running authentication, which is the
+ * difference between a fast and a slow startup against a remote server.
  */
 export async function discoverServiceProvider(
   client: OSLCClient,
   spURI: string,
-  sharedShapes: Map<string, DiscoveredShape> = new Map()
+  sharedShapes: Map<string, DiscoveredShape> = new Map(),
+  sharedShapeDocs: Map<string, OSLCResource> = new Map()
 ): Promise<DiscoveredServiceProvider | null> {
   let spResource: OSLCResource;
   try {
@@ -117,8 +126,14 @@ export async function discoverServiceProvider(
         } else {
           try {
             const shapeDocURI = shapeURI.split('#')[0];
-            console.error(`[discovery] Fetching shape: ${shapeDocURI}`);
-            const shapeResource = await client.getResource(shapeDocURI, '2.0', ACCEPT_RDF);
+            let shapeResource = sharedShapeDocs.get(shapeDocURI);
+            if (!shapeResource) {
+              // one line per DOCUMENT, not per fragment: the report stays as short
+              // as the number of documents actually retrieved.
+              console.error(`[discovery] Fetching shape document: ${shapeDocURI}`);
+              shapeResource = await client.getResource(shapeDocURI, '2.0', ACCEPT_RDF);
+              sharedShapeDocs.set(shapeDocURI, shapeResource);
+            }
             shape = parseShape(shapeResource, shapeURI !== shapeDocURI ? shapeURI : undefined);
             sharedShapes.set(shapeURI, shape);
           } catch (err) {
@@ -182,17 +197,18 @@ export async function discoverFromServiceProviders(
 ): Promise<DiscoveryResult> {
   const serviceProviders: DiscoveredServiceProvider[] = [];
   const shapes = new Map<string, DiscoveredShape>();
+  const shapeDocs = new Map<string, OSLCResource>();
 
   for (const spURI of spURIs) {
     console.error(`[discovery] Fetching scoped service provider: ${spURI}`);
-    const sp = await discoverServiceProvider(client, spURI, shapes);
+    const sp = await discoverServiceProvider(client, spURI, shapes, shapeDocs);
     if (sp) serviceProviders.push(sp);
   }
 
   console.error(
     `[discovery] Scoped discovery complete: ${serviceProviders.length}/${spURIs.length} providers, ` +
     `${serviceProviders.reduce((n, sp) => n + sp.factories.length, 0)} factories, ` +
-    `${shapes.size} shapes (catalog not fetched)`
+    `${shapes.size} shapes from ${shapeDocs.size} document(s) (catalog not fetched)`
   );
 
   return {
@@ -238,11 +254,12 @@ export async function discover(
 
   const serviceProviders: DiscoveredServiceProvider[] = [];
   const shapes = new Map<string, DiscoveredShape>();
+  const shapeDocs = new Map<string, OSLCResource>();
 
   for (const spNode of spNodes) {
     const spURI = spNode.value;
     console.error(`[discovery] Fetching service provider: ${spURI}`);
-    const sp = await discoverServiceProvider(client, spURI, shapes);
+    const sp = await discoverServiceProvider(client, spURI, shapes, shapeDocs);
     if (sp) serviceProviders.push(sp);
   }
 
