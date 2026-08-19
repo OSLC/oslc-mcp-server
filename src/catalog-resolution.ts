@@ -16,8 +16,7 @@ const { Namespace } = rdflib;
  * Both namespace generations are listed. The `xmlns/<domain>/1.0/` forms are
  * what ELM emits; the `ns/<domain>#` forms are OSLC 3.0, and are what the
  * servers in this workspace emit. A server advertising only the newer form
- * would otherwise fall through to the convention, which is a different URL
- * and usually the wrong one.
+ * would otherwise not be found at all.
  *
  * Deliberately absent: `http://open-services.net/ns/config#cmServiceProviders`.
  * There is no ambiguity in the RDF — change management is `ns/cm#` and
@@ -42,8 +41,8 @@ const CATALOG_PREDICATES = [
 
 /**
  * How a catalog URL was arrived at. `describe_discovery` reports it, because
- * a catalog reached by the fallback convention and one advertised by the
- * server are very different situations that look identical downstream.
+ * a URL the operator asserted and one the server advertised are different
+ * situations that look identical downstream.
  */
 export type CatalogSource =
   | { kind: 'explicit' }

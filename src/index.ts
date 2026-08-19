@@ -107,7 +107,7 @@ async function main(): Promise<void> {
       config.configurationContext ?? null
     );
 
-    // Explicit value, else rootservices, else the convention.
+    // An explicit value, else whatever rootservices advertises. Never a guess.
     const catalog = await resolveCatalogUrl(
       client, config.serverURL, config.catalogURL || undefined
     );

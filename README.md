@@ -61,7 +61,7 @@ servers:
 |---|---|---|
 | `alias` | yes | — must be unique across servers |
 | `baseUrl` | yes | — |
-| `catalogUrl` | no | discovered from `rootservices`, else `${baseUrl}/oslc/catalog` |
+| `catalogUrl` | no | discovered from `rootservices` |
 | `configurationContext` | no | none. Fallback for the server's service providers |
 | `credentials` | no | unauthenticated |
 | `serviceProviders` | no | absent means walk the whole catalog |
@@ -81,7 +81,9 @@ Literal `username` / `password` also work, and emit one warning at load naming t
 
 **Scoping discovery.** `serviceProviders` restricts startup to the listed providers and **the catalog is never fetched**. This matters because on an ELM application **one service provider is one project area**, and a production server may have thousands — an unscoped startup would crawl every one. Omit the list and the catalog is walked as before.
 
-**Catalog resolution**, in order: an explicit `catalogUrl` wins; otherwise `${baseUrl}/rootservices` is read and the domain's service-providers predicate used (`oslc_rm:rmServiceProviders`, `oslc_qm:qmServiceProviders`, `oslc_cm:cmServiceProviders`, `oslc_am:amServiceProviders`); otherwise `${baseUrl}/oslc/catalog`. An application may advertise several catalogs, so selection is by domain predicate rather than by taking the first found — and note the `${baseUrl}/oslc/catalog` convention matches no ELM application, which is why discovery exists.
+**Catalog resolution**: an explicit `catalogUrl` wins; otherwise `${baseUrl}/rootservices` is read and the domain's service-providers predicate used. Both namespace generations are recognised — the ELM `oslc_rm:`/`oslc_qm:`/`oslc_cm:`/`oslc_am:` forms under `open-services.net/xmlns/<domain>/1.0/`, and the OSLC 3.0 forms under `open-services.net/ns/<domain>#` — with OSLC Core's generic `oslc:serviceProviderCatalog` as a last resort. An application may advertise several catalogs, so selection is by domain predicate rather than by taking the first found. `oslc_config:cmServiceProviders` is never matched: it is a catalog of configurations, not of service providers.
+
+If neither route yields a catalog, startup fails with an error naming `catalogUrl`. It does **not** guess a URL. A client may not assume the shape of a catalog URL — that is what `rootservices` is for, and why `rootservices` itself is unauthenticated: discovery boots from it, and it carries the URLs a client needs in order to authenticate.
 
 **Configuration context.** Required against configuration-enabled ELM project areas, where a request without one cannot say which stream or baseline it applies to. A service provider's value overrides its server's.
 
