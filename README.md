@@ -164,6 +164,19 @@ header and return whatever representation it chooses, so the result records only
 on that request -- never what it is able to produce. An `application/rdf+xml` response to a Turtle
 request is conformant behaviour, not a fault.
 
+`reportPath` writes the same content `describe_discovery` returns to a file, on every start
+(default `./oslc-discovery.md`, one section per configured server). A tool cannot answer the question
+it is most needed for -- a server that started and generated the wrong tools, or none -- so the file
+is written whether or not a client asks. It carries no timestamp, so an unchanged deployment produces
+an identical file, and is small enough to hand to an assistant as context for what the tools can do.
+
+### Further reading
+
+- [Using `oslc-mcp-server` with IBM ELM](docs/elm-compatibility.md) — how ELM behaves as an OSLC
+  provider, and the quirks that fail silently rather than with an error.
+- [`oslc-mcp-server` and IBM Engineering AI Hub 1.3](docs/comparison-ibm-engineering-ai-hub.md) — a
+  capability comparison between deriving tools from OSLC discovery and building them per application.
+
 ## Architecture
 
 ```
