@@ -10,7 +10,19 @@ export interface DescribeDiscoveryInput {
   prefix: string;
   catalog: CatalogResolution;
   discovery: DiscoveryResult;
+  /**
+   * Enumerate at most this many service providers, then say how many were
+   * omitted. A scoped run names a handful and is never affected. A catalog-wide
+   * crawl of a large deployment is: 306 providers at ~10 factories each is a
+   * six-figure token count, and this report is meant to be readable — and to be
+   * usable as context describing what the tools can do. Truncation is stated,
+   * never silent.
+   */
+  maxProviders?: number;
 }
+
+/** Providers enumerated before the report summarises the remainder. */
+export const DEFAULT_MAX_PROVIDERS = 25;
 
 /**
  * Mirror of tool-factory.ts's sanitizeName. Duplicated deliberately: this
@@ -84,6 +96,7 @@ function describeProvider(sp: DiscoveredServiceProvider, prefix: string): string
  */
 export function describeDiscovery(input: DescribeDiscoveryInput): string {
   const { alias, prefix, catalog, discovery } = input;
+  const maxProviders = input.maxProviders ?? DEFAULT_MAX_PROVIDERS;
   const lines: string[] = [
     `## Discovery — ${alias}`,
     '',
@@ -103,9 +116,35 @@ export function describeDiscovery(input: DescribeDiscoveryInput): string {
     return lines.join('\n');
   }
 
-  for (const sp of discovery.serviceProviders) {
+  const shown = discovery.serviceProviders.slice(0, maxProviders);
+  for (const sp of shown) {
     lines.push('', ...describeProvider(sp, prefix));
   }
 
+  const omitted = discovery.serviceProviders.length - shown.length;
+  if (omitted > 0) {
+    lines.push('', `_${omitted} further service provider(s) not enumerated ` +
+      `(limit ${maxProviders}). Scope discovery to the providers you use to see them all._`);
+  }
+
   return lines.join('\n');
+}
+
+/**
+ * One document covering every configured server, for `reportPath`.
+ *
+ * Deliberately carries no timestamp: the file is rewritten on every start, and
+ * a timestamp would make it churn in a diff. Anyone who wants the capture time
+ * has the file's own mtime — and a report kept under version control as context
+ * should change only when what it describes changes.
+ */
+export function describeDiscoveryDocument(inputs: DescribeDiscoveryInput[]): string {
+  const header = [
+    '# OSLC MCP server — discovery',
+    '',
+    'What discovery found, and which URL each generated tool will hit.',
+    'Rewritten on every server start.',
+  ].join('\n');
+
+  return [header, ...inputs.map((i) => describeDiscovery(i))].join('\n\n') + '\n';
 }

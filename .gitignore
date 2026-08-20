@@ -5,3 +5,8 @@ node_modules/
 # carry literal credentials. The committed example is *.example.yaml.
 oslc-mcp-server*.yaml
 !oslc-mcp-server*.example.yaml
+
+# The discovery report at its default path is a runtime artifact, rewritten on
+# every start. To keep one as committed context, point `reportPath` at a
+# deliberate location (e.g. docs/discovery-<deployment>.md) and commit that.
+oslc-discovery.md

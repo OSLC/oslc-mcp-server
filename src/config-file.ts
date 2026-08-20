@@ -31,7 +31,18 @@ export interface ServerEntry {
 
 export interface ConfigFile {
   servers: ServerEntry[];
+  /**
+   * Where the discovery report is written on every start. Defaults to
+   * `DEFAULT_REPORT_PATH`. A report is always written: the case it is most
+   * wanted for is a server that started and produced the wrong tools, and
+   * asking an MCP client to call a tool cannot help when the tool is what is
+   * missing.
+   */
+  reportPath?: string;
 }
+
+/** Default `reportPath`. */
+export const DEFAULT_REPORT_PATH = './oslc-discovery.md';
 
 /**
  * Parse and validate configuration YAML.
@@ -130,7 +141,11 @@ export function parseConfigFile(yamlText: string): ConfigFile {
     };
   });
 
-  return { servers: parsed };
+  const reportPath = typeof (raw as any).reportPath === 'string' && (raw as any).reportPath.trim()
+    ? String((raw as any).reportPath).trim()
+    : undefined;
+
+  return { servers: parsed, reportPath };
 }
 
 export function loadConfigFile(path: string): ConfigFile {

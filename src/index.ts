@@ -40,12 +40,12 @@ function parseArgs(argv: string[]): CliArgs {
  * Resolve the servers to serve, from the configuration file if one is given,
  * otherwise from CLI args and environment variables exactly as before.
  */
-function resolveServers(args: CliArgs): ResolvedServer[] {
+function resolveServers(args: CliArgs): { servers: ResolvedServer[]; reportPath?: string } {
   const configPath = args.config ?? process.env.OSLC_CONFIG_FILE;
 
   if (configPath) {
     const file = loadConfigFile(configPath);
-    return file.servers.map((entry) => {
+    const servers = file.servers.map((entry) => {
       const { username, password } = resolveCredentials(entry, process.env);
       return {
         alias: entry.alias,
@@ -60,6 +60,7 @@ function resolveServers(args: CliArgs): ResolvedServer[] {
         serviceProviderURIs: (entry.serviceProviders ?? []).map((sp) => sp.uri),
       };
     });
+    return { servers, reportPath: file.reportPath };
   }
 
   const serverURL = args.serverURL ?? process.env.OSLC_SERVER_URL ?? '';
@@ -75,7 +76,7 @@ function resolveServers(args: CliArgs): ResolvedServer[] {
     process.exit(1);
   }
 
-  return [{
+  return { servers: [{
     alias: 'oslc',
     config: {
       serverURL,
@@ -86,11 +87,11 @@ function resolveServers(args: CliArgs): ResolvedServer[] {
         args.configurationContext ?? process.env.OSLC_CONFIGURATION_CONTEXT,
     },
     serviceProviderURIs: [],
-  }];
+  }] };
 }
 
 async function main(): Promise<void> {
-  const servers = resolveServers(parseArgs(process.argv.slice(2)));
+  const { servers, reportPath } = resolveServers(parseArgs(process.argv.slice(2)));
   const prefixTools = servers.length > 1;
 
   const started: StartedServer[] = [];
@@ -128,7 +129,7 @@ async function main(): Promise<void> {
     });
   }
 
-  await startServer(started);
+  await startServer(started, { reportPath });
 }
 
 main().catch((err) => {

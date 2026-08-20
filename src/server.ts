@@ -29,7 +29,9 @@ import type { GeneratedTool } from 'oslc-service/mcp';
 import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
-import { describeDiscovery } from './describe-discovery.js';
+import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
+import { DEFAULT_REPORT_PATH } from './config-file.js';
+import { writeFileSync } from 'node:fs';
 import { checkTurtleSupport, formatTurtleCheck, type HttpGetter } from './representation.js';
 
 const { serialize: rdfSerialize } = rdflib;
@@ -333,7 +335,44 @@ interface ServerRuntime {
  * each is prefixed by its alias so a call is unambiguous about which server
  * it reaches.
  */
-export async function startServer(servers: StartedServer[]): Promise<void> {
+/**
+ * Write what discovery found to a file, every start.
+ *
+ * The `describe_discovery` tool renders the same thing on demand, but a tool
+ * cannot answer the question it is most needed for — a server that started and
+ * generated the wrong tools, or none. A file is there either way, and is small
+ * enough to hand to an assistant as context describing what the tools can do.
+ *
+ * A failure to write is reported and otherwise ignored: the report is
+ * diagnostic, and losing it is no reason to refuse to serve.
+ */
+function writeDiscoveryReport(runtimes: ServerRuntime[], path: string): void {
+  try {
+    const document = describeDiscoveryDocument(runtimes.map((r) => ({
+      alias: r.spec.alias,
+      prefix: r.spec.prefix,
+      catalog: r.spec.catalog,
+      discovery: r.discovery,
+    })));
+    writeFileSync(path, document, 'utf8');
+    console.error(
+      `[report] wrote ${path} (${document.split('\n').length} lines, ` +
+      `${runtimes.length} server${runtimes.length === 1 ? '' : 's'})`
+    );
+  } catch (err) {
+    console.error(`[report] could not write ${path}:`, err instanceof Error ? err.message : err);
+  }
+}
+
+export interface StartOptions {
+  /** Where to write the discovery report; `DEFAULT_REPORT_PATH` when absent. */
+  reportPath?: string;
+}
+
+export async function startServer(
+  servers: StartedServer[],
+  options: StartOptions = {}
+): Promise<void> {
   const server = new Server(
     { name: 'oslc-mcp-server', version: '1.0.0' },
     { capabilities: { tools: { listChanged: true }, resources: { listChanged: true } } }
@@ -383,6 +422,8 @@ export async function startServer(servers: StartedServer[]): Promise<void> {
     runtime.rebuild();
     return runtime;
   });
+
+  writeDiscoveryReport(runtimes, options.reportPath ?? DEFAULT_REPORT_PATH);
 
   /**
    * Route a tool call to the server that owns it. Longest prefix wins, so an

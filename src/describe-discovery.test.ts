@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { describeDiscovery } from './describe-discovery.js';
+import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
 import type { DiscoveryResult } from 'oslc-service/mcp';
 
 const SP = 'https://elm.example.com/rm/sp/1';
@@ -116,5 +116,71 @@ describe('describeDiscovery', () => {
   it('says so plainly when no service providers were discovered', () => {
     const empty = { ...discoveryWith(), serviceProviders: [] } as DiscoveryResult;
     expect(describeDiscovery({ ...base, discovery: empty })).toContain('No service providers');
+  });
+});
+
+describe('the provider cap', () => {
+  function withProviders(n: number): DiscoveryResult {
+    const base = discoveryWith();
+    const one = (base as any).serviceProviders[0];
+    (base as any).serviceProviders = Array.from({ length: n }, (_, i) => ({
+      ...one, title: `Provider ${i}`, uri: `${SP}/${i}`,
+    }));
+    return base;
+  }
+
+  const input = (discovery: DiscoveryResult, maxProviders?: number) => ({
+    alias: 'rm', prefix: '', discovery, maxProviders,
+    catalog: { url: 'https://elm.example.com/rm/catalog',
+               source: { kind: 'explicit' } } as any,
+  });
+
+  it('enumerates every provider when under the limit', () => {
+    const out = describeDiscovery(input(withProviders(3), 25));
+    expect(out).toContain('Provider 0');
+    expect(out).toContain('Provider 2');
+    expect(out).not.toContain('not enumerated');
+  });
+
+  it('states how many it left out, rather than truncating silently', () => {
+    const out = describeDiscovery(input(withProviders(30), 25));
+    expect(out).toContain('Provider 24');
+    expect(out).not.toContain('Provider 25');
+    // the count must be stated: a reader has to know the list is partial.
+    expect(out).toContain('5 further service provider(s) not enumerated');
+    expect(out).toContain('limit 25');
+  });
+
+  it('still reports the true total in the header', () => {
+    const out = describeDiscovery(input(withProviders(30), 2));
+    expect(out).toContain('Service providers: 30');
+  });
+});
+
+describe('the report document', () => {
+  const input = (alias: string) => ({
+    alias, prefix: `${alias}_`, discovery: discoveryWith(),
+    catalog: { url: 'https://elm.example.com/rm/catalog',
+               source: { kind: 'explicit' } } as any,
+  });
+
+  it('covers every configured server in one document', () => {
+    const out = describeDiscoveryDocument([input('rm'), input('qm')]);
+    expect(out).toContain('# OSLC MCP server — discovery');
+    expect(out).toContain('## Discovery — rm');
+    expect(out).toContain('## Discovery — qm');
+  });
+
+  it('carries no timestamp, so an unchanged deployment produces an identical file', () => {
+    // the file is rewritten every start; a timestamp would churn any diff, and
+    // this report is meant to be usable as committed context.
+    expect(describeDiscoveryDocument([input('rm')]))
+      .toEqual(describeDiscoveryDocument([input('rm')]));
+  });
+
+  it('ends with exactly one newline', () => {
+    const out = describeDiscoveryDocument([input('rm')]);
+    expect(out.endsWith('\n')).toBe(true);
+    expect(out.endsWith('\n\n')).toBe(false);
   });
 });

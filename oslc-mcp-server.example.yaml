@@ -29,6 +29,18 @@
 # username/password also work and emit one warning at load — the file is
 # git-ignored, but it still travels in pastes, backups and screen shares.
 
+# ── reportPath ──────────────────────────────────────────────────────────
+# Where the discovery report is written, on every start (default
+# ./oslc-discovery.md). It lists each service provider, every creation factory
+# and query capability, every shape that failed to fetch, and the URL each
+# generated tool will hit — the same content the `describe_discovery` tool
+# returns. A file is written whether or not any client asks, because the case
+# it is most wanted for is a server that started and produced the wrong tools.
+# Small enough (a few hundred tokens per scoped server) to hand to an assistant
+# as context for what these tools can actually do.
+#
+# reportPath: ./oslc-discovery.md
+
 servers:
   - alias: dng
     baseUrl: https://elm.example.com/rm
