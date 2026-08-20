@@ -1,148 +1,180 @@
 # `oslc-mcp-server` and IBM Engineering AI Hub 1.3
 
-A capability comparison, written in August 2026. Both expose IBM ELM to MCP-speaking AI
-assistants, and they arrive at it from opposite directions: **AI Hub ships tools built for
-each ELM application; `oslc-mcp-server` derives its tools from what a server advertises
-over OSLC.** That difference explains most of what follows, in both directions.
+A capability comparison, August 2026. Both expose IBM ELM to MCP-speaking AI assistants and arrive
+at it from opposite directions: **AI Hub ships tools written for each application; `oslc-mcp-server`
+derives its tools from what a server advertises over OSLC.** That single difference explains almost
+every gap below, in both directions — and the directions are not the ones you would guess.
 
-Written to be useful when choosing between them, so the gaps in this project are stated as
-plainly as the gaps in the other.
+## Sourcing
 
-## Sourcing, and what could not be verified
+The AI Hub inventory below is from IBM's product documentation, *MCP tools for Engineering AI Hub*
+(topics dated 2026-06-18). **Those pages could not be retrieved programmatically** — `ibm.com/docs`
+answers automated clients with a 403 or a 503 error page — so the inventory was transcribed by hand
+and the tool descriptions here are condensed rather than quoted. Verify against the product
+documentation before relying on any single line.
 
-**`https://www.ibm.com/docs/en/engineering-ai-hub/1.3.0` returns HTTP 403 to automated
-fetches**, as does the product announcement page. Everything about AI Hub below comes from
-IBM's announcement summaries and the Jazz community articles listed at the end.
+The `oslc-mcp-server` figures are measured, not estimated: one run against an ELM 7.1 SR1 deployment
+on 2026-08-20, scoped to one project area per application.
 
-Consequently:
+## What AI Hub provides — 42 tools
 
-- **The AI Hub tool inventory — names, parameters, which are read-only — is not reflected
-  here, because it was not reachable.** The Jazz articles describe capabilities without
-  naming individual tools. Any comparison of *tool counts* would be unfounded, so none is
-  made: the table below compares the shape of the capability, not its size.
-- Whether "managed endpoint" implies IBM-operated components in the request path is
-  unverified. It is the first question a regulated deployment will ask.
-- Entitlement pricing and packaging are unknown.
-
-**A conflation worth avoiding.** Searching for this turns up an "ELM MCP" exposing DNG,
-EWM, ETM, GCM and SCM as 84 tools and 15 prompts. That is
-[brettscharm/elm-mcp](https://github.com/brettscharm/elm-mcp), a third-party open-source
-project, **not** IBM's product. The names are similar enough to mislead.
-
-## What each provides
-
-IBM Engineering AI Hub 1.3 offers a **managed MCP endpoint** over ELM, described as
-grounded in requirements, work items, models, tests and traceability, across **DOORS Next**,
-**EWM** and **ETM**. Named operations include finding requirements related to a change
-request, summarising potential impact, creating requirements through governed change sets,
-searching work items by attributes, and adding comments. Its published use cases emphasise
-*analysis*: delivery status and planning risk, trends, blockers, dependencies; retrieving
-failed execution records and tracing failures back to requirements and defects.
-
-`oslc-mcp-server` generates its tools at startup from OSLC discovery. Measured against two
-servers:
-
-| Server | Tools |
-|---|---|
-| A genOSLC owned-domain server, 4 creation factories | 9 generic + 5 per-type |
-| The same, 14 creation factories | 10 generic + 14 per-type |
-
-Per-type tools are derived — one per advertised `oslc:CreationFactory` whose
-`oslc:resourceShape` resolved. A factory whose shape fails to fetch produces no tool, which
-is why `describe_discovery` lists failed shapes separately.
-
-## Comparison
-
-| | IBM Engineering AI Hub 1.3 | `oslc-mcp-server` |
+| Domain | Tools | Of which write |
 |---|---|---|
-| Licensing | Separate entitlement in addition to ELM licences | Open source; ELM licences only |
-| Hosting | Managed endpoint | Self-hosted |
-| Where tools come from | Built per ELM application | Derived from OSLC discovery |
-| Servers supported | ELM (DOORS Next, EWM, ETM) | Any conformant OSLC provider, ELM included |
-| A new domain | Ships when the vendor ships it | Appears as tools with no code change |
-| Write path | Creation through governed change sets | `create_*` per factory, shape-validated; generic update and delete |
-| Aggregate analysis | Planning risk, trends, blockers, dependencies | None — CRUD and query only |
-| Configuration context | Global configuration management | A `configurationContext` per service provider — opaque, so any configuration including a global one whose DOORS Next contribution is a change set |
-| Behaviour of a given tool | Not stated in the material reachable here | `describe_discovery` names each tool and the URL it will hit |
+| Common, cross-application | 9 | 3 |
+| Requirements — DOORS Next | 9 | 3 |
+| **Models — Rhapsody, SysML v2** | **14** | 0 |
+| Work Items — EWM | 6 | 1 |
+| Test — ETM | 4 | 1 |
+| **Total** | **42** | **8** |
 
-## The difference that matters: what a tool can reach
+- **Common** — `get_user`, `get_project_area`, `list_project_areas`; `list_linked_requirements` /
+  `list_linked_workitems` / `list_linked_testartifacts`; and three link creators,
+  `link_workitem_and_requirement`, `link_workitem_and_testartifact`,
+  `link_testartifact_and_requirement`.
+- **Requirements** — component, type-system, folder and configuration introspection
+  (`get_project_components`, `get_project_component_types`, `get_project_component_folders`,
+  `get_project_component_configuration`); `get_requirement`, `search_requirement`,
+  `create_requirement`; and a change-set workflow, `create_requirement_change_set` +
+  `deliver_requirement_change_set`.
+- **Models** — 14 tools over SysML v2 in Rhapsody: projects, diagrams (including graphical layout),
+  element retrieval and traversal, four search variants, reverse-reference lookup for impact
+  analysis, and version control — `list_branches`, `get_branch_history`, `list_branch_tags`.
+- **Work Items** — `get_workitem`, `get_workitem_schema`, `list_workitem_categories`,
+  `list_workitem_releases`, `search_workitems`, `add_comment_to_workitem`.
+- **Test** — `get_testartifact`, `get_testartifact_schema`, `search_testartifact`,
+  `add_comment_to_testartifact`.
 
-A vendor building tools for its own applications may use **any** interface those applications
-expose — OSLC, a native REST API, or a lifecycle index. A discovery-driven client is limited to
-**what the server advertises over OSLC**, and no more. Everything below follows from that.
+## What `oslc-mcp-server` produced from discovery
 
-### Aggregate analysis
+Measured, one project area per application:
 
-Identifying trends, blockers and dependencies is reasoning over a corpus. **OSLC advertisements
-describe no such capability, so no amount of discovery can produce it.** A server may of course
-expose an equivalent — a reporting index, a metrics API — but a client cannot find it by
-discovery, and nothing in the OSLC specifications requires one to exist. Closing this gap means
-hand-writing tools against a specific interface, which is the approach AI Hub took.
+| Application | Creation factories | `create_*` tools | Query capabilities advertised |
+|---|---|---|---|
+| DOORS Next | 12 | 2 | 8 |
+| ETM | 13 | 13 | 15 |
+| EWM | 10 | 9 | 2 |
 
-### Where the advertisement is thinner than the application
+Plus nine generic tools per server: `get_resource`, `update_resource`, `delete_resource`,
+`query_resources`, `list_resource_types`, `read_catalog`, `read_service_provider`,
+`describe_discovery`, `check_turtle_support`.
 
-This is the sharper case, and it cuts both ways.
+DOORS Next yields only 2 create tools from 12 factories, and that is correct: ten of its factories
+are administrative — ReqIF import/export, attribute, artifact and link types, delivery and
+type-system-copy sessions — which create no shaped OSLC resource and so advertise no
+`oslc:resourceShape`.
 
-An `oslc:QueryCapability` publishes `oslc:queryBase` and sometimes `oslc:resourceType`. It
-publishes nothing about which `oslc.where` operators work, whether `oslc.select` nests, whether
-`oslc.orderBy` is honoured, or how paging behaves — see
-[`elm-compatibility.md`](elm-compatibility.md). A vendor writing tools for its own application
-never faces this: it knows what its own server does. A discovery-driven client must either
-assume or measure, which is why
+## The surprise: writes
+
+**AI Hub is read-mostly.** Eight of its 42 tools write, and the shape of those eight matters more
+than the count:
+
+- exactly **one** tool creates an artifact — `create_requirement`;
+- **no tool creates a work item or a test artifact**;
+- **no tool updates any artifact**, in any application;
+- **no tool deletes anything**.
+
+The remaining writes are three OSLC link creators, two comment adders, and the two change-set
+operations.
+
+So on write coverage for ETM and EWM, **discovery is ahead**: 13 and 9 `create_*` tools respectively,
+against none, plus generic `update_resource` and `delete_resource` wherever a server accepts them.
+That is a direct consequence of the derivation — every advertised creation factory becomes a tool
+whether or not anyone thought to write one, and shapes supply the write contract.
+
+Whether that is an advantage depends on what is wanted. A read-mostly surface is a defensible
+governance posture for an AI assistant, and *"the AI cannot delete a requirement"* is a property some
+deployments will pay for. But it is a **policy** choice presented as a tool inventory, and a client
+that needs to create a test case will not find a tool for it.
+
+## Where AI Hub reaches what OSLC discovery cannot
+
+Four gaps, all real, and none closable by better discovery.
+
+**1. SysML v2 models — 14 tools, entirely outside OSLC.** Branches, commit history, tags, diagrams
+with graphical positions. This is the SysML v2 API, not an OSLC service. Nothing in an OSLC catalog
+advertises it, so no discovery-driven client can produce these tools. It is the largest single block
+of AI Hub's inventory.
+
+**2. Structure and process navigation.** Folders, work-item categories, releases, team areas,
+timelines and iterations, component hierarchy. **An OSLC service provider advertises none of this** —
+it advertises creation factories, query capabilities, dialogs and shapes. A client can query
+artifacts and cannot browse the structure they live in.
+
+**3. Configuration and versioning — `get_project_component_configuration`,** returning streams,
+baselines, change sets and snapshots. This is the sharpest one, because this project hit exactly that
+wall and documented it: `/rm/configurationQuery` cannot enumerate configurations (unfiltered it
+answers `400 — "The oslc_config:baselineOfStream is not specified in the URL"`), and the only route
+found from a project area to its stream URI was the **RM component picker, a human-driven selection
+dialog**. AI Hub ships a tool for it. See the `configurationContext` notes in
+`oslc-mcp-server.example.yaml`.
+
+Related: `create_requirement_change_set` and `deliver_requirement_change_set` *create and deliver* a
+change set. Working *inside* one is not a gap — `configurationContext` is opaque and accepts any
+configuration URI, including a global configuration whose DOORS Next contribution is a change set,
+which makes that a configuration decision rather than a capability. Creating and delivering one is a
+workflow this project does not expose.
+
+**4. Users — `get_user`.** No OSLC query capability advertises people.
+
+There is also a softer difference. `get_workitem_schema` and `get_testartifact_schema` return
+workflow states, priorities, category types and enum mappings; an `oslc:ResourceShape` describes
+properties, occurrence and value types. The shape is the write contract and is genuinely equivalent
+for validation, but it says less about process.
+
+## Where derivation is ahead
+
+1. **Any conformant OSLC provider, not five named applications.** A server advertising a catalog,
+   creation factories and shapes gets tools — which is the point of the [AAKI](../../docs/AAKI.md)
+   bridge: a governed domain defined outside any vendor's roadmap becomes AI-addressable without a
+   product release. Point it at [`oslc-server`](../../oslc-server) or a genOSLC owned domain and the
+   tools follow from the vocabulary and shapes.
+2. **Write coverage on ETM and EWM**, as above.
+3. **No entitlement** beyond the licences already held for the servers being read; **self-hosted**,
+   so requests do not traverse a managed service.
+4. **The generated surface is inspectable.** `describe_discovery` and the report written to
+   `reportPath` on every start state each tool, the URL it will hit, and every shape that failed to
+   fetch — because the transformation from advertisement to tool has several steps and a missing tool
+   is otherwise silent.
+
+## What this does not settle: whether the filters work
+
+Both sides advertise search. AI Hub has `search_requirement` (text), `search_workitems` (described as
+advanced query expressions), `search_testartifact` (advanced filtering over artifact schemas), and
+four model searches. Discovery finds 8, 15 and 2 query capabilities in DOORS Next, ETM and EWM.
+
+**Neither inventory says what a filter does.** An `oslc:QueryCapability` publishes `queryBase` and
+sometimes `resourceType`, and nothing about which `oslc.where` operators work, whether `oslc.select`
+nests, whether `oslc.orderBy` is honoured, or how paging behaves — see
+[`elm-compatibility.md`](elm-compatibility.md). A tool description saying "advanced filtering" is not
+more precise. Measuring it is what
 [the capability probe](../../docs/superpowers/specs/2026-08-17-oslc-mcp-server-capability-probing-design.md)
-measures.
+is for, and the same probe would be worth pointing at AI Hub.
 
-**But a thin advertisement is not the same as a missing capability, and neither is a bad question.**
-Worked example from this project's own findings, now resolved: discovery recorded **no query
-capabilities for ETM**, which reads like an application that cannot be queried. It was not.
-The service provider URI was **stale** — the deployment had been rebuilt and every project-area
-id changed. Re-run against the current project area, ETM advertises **15 query capabilities**,
-including `TestExecutionRecordQuery` and `TestResultQuery`.
-
-That materially changes the comparison. The test-management capabilities described for AI Hub —
-retrieving failed execution records, correlating them with test cases and tracing them to
-requirements — rest on artifacts ETM **advertises as queryable over OSLC**. They are discoverable,
-not privileged.
-
-The lesson generalises: **before concluding that a vendor's tools reach something OSLC discovery
-cannot, check that discovery was looking in the right place.** A stale URI, a missing
-configuration context or an unscoped application-level capability all present as an absent
-capability rather than as an error. An honest comparison of reach requires the discovery side to
-be correct first — and in the one case tested here, it was not.
-
-## Where a discovery-driven server is ahead
-
-1. **It already works against providers a vendor will not ship.** Any server advertising a
-   catalog, creation factories and shapes gets tools. That is the point of the
-   [AAKI](../../docs/AAKI.md) bridge: a governed domain you defined yourself is
-   AI-addressable without a product release. Point it at
-   [`oslc-server`](../../oslc-server) or a genOSLC owned domain and the tools follow from
-   the vocabulary and shapes.
-2. **No entitlement beyond the licences already held** for the servers being read.
-3. **Self-hosted**, so requests do not traverse a managed service.
-4. **The generated surface is inspectable.** `describe_discovery` — and the report written to
-   `reportPath` on every start — states each tool, the URL it will hit, and every shape that
-   failed to fetch. This exists because the transformation from advertisement to tool has
-   several steps, and a missing tool is otherwise silent.
+One correction on the record. This project previously reported **zero** ETM query capabilities, which
+read as an application that could not be queried. That was wrong: the service provider URI was stale
+after a deployment rebuild. ETM advertises **15**, `TestExecutionRecordQuery` and `TestResultQuery`
+among them — so the artifacts AI Hub's test scenarios operate on are advertised over OSLC, not
+reachable only through a vendor's tools. **A stale URI presents as an absent capability, not as an
+error**, and it was one citation away from becoming a published claim about someone else's product.
 
 ## Choosing
 
-- **ELM only, and the aggregate-analysis capabilities matter** — AI Hub does things this project
-  does not, and closing that gap means writing tools against a specific interface rather than
-  discovering them.
-- **Governed domains beyond ELM, or entitlement is the constraint, or the deployment must be
-  self-hosted, or the tool surface has to be auditable** — that is what this project is for.
+- **Rhapsody SysML v2 models, or process and structure navigation, or resolving configurations
+  programmatically** — AI Hub does things this project does not, and no amount of discovery will
+  change that.
+- **Governed domains beyond ELM; creating artifacts in ETM or EWM; updating or deleting; no
+  entitlement; self-hosted; an auditable tool surface** — that is what this project is for.
 
-They are not mutually exclusive: both speak MCP, and an assistant can be configured with
-both.
+Both speak MCP, and an assistant can be configured with both.
 
 ---
 
 ## Sources
 
+- IBM product documentation, *MCP tools for Engineering AI Hub* — Common, Requirements, Models, Work
+  Items and Test topics, dated 2026-06-18. Not retrievable programmatically; see **Sourcing**.
 - [IBM Engineering AI Hub 1.3 announcement](https://www.ibm.com/new/announcements/ibm-engineering-ai-hub-1-3-helps-engineering-teams-scale-governed-agentic-ai-across-the-lifecycle)
-- [Introducing IBM Engineering AI Hub v1.0](https://www.ibm.com/new/announcements/introducing-ibm-engineering-ai-hub-v1-for-high-trust-engineering-domains)
 - [Beyond queries: AI-assisted Work Item Management with Engineering AI Hub 1.3 MCP Tools](https://jazz.net/library/article/98823)
-- [AI-assisted Test Management with IBM Engineering AI Hub 1.3 MCP Tools](https://jazz.net/library/article/98798)
-- [DOORS Next 7.2 — AI and automation](https://www.ibm.com/docs/en/engineering-lifecycle-management-suite/doors-next/7.2.0?topic=overview-ai-automation)
-- [brettscharm/elm-mcp](https://github.com/brettscharm/elm-mcp) — third-party, for the disambiguation above
+- [AI-assisted Test Management with Engineering AI Hub 1.3 MCP Tools](https://jazz.net/library/article/98798)
+- [IBM ELM-Python-Client — OSLC query notes](https://github.com/IBM/ELM-Python-Client/blob/master/elmclient/examples/OSLCQUERY.md)
+- [brettscharm/elm-mcp](https://github.com/brettscharm/elm-mcp) — an unrelated third-party MCP server for ELM, noted because search results conflate it with IBM's product
