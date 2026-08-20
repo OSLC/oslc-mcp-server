@@ -84,7 +84,7 @@ Measured on one deployment, with an `oslc.where` chosen to match **nothing**:
 |---|---|---|---|
 | EWM | 2 | Returns work items | `400` — `oslc:Error … "Cannot reconstruct value"` |
 | DOORS Next | 8 | Returns members | `200`, **and the same members as unfiltered** |
-| ETM | **0** | — | — |
+| ETM | **0** — see below; ETM *does* support query | — | — |
 
 > **Read these as observations, not as established product behaviour.** They were taken against **configuration-enabled** project areas, on a deployment whose configuration management was known to be misbehaving at the time, and **without supplying a `Configuration-Context`**. The requests also declared no **`oslc.prefix`** for the prefixes used in the filter. DOORS Next is expected to support `oslc.where`, so the most likely explanations are the missing configuration context or the undeclared prefix rather than the product. **The cause is not established.** This section will be revised once the same probes run against non-configuration-enabled project areas with prefixes declared.
 
@@ -94,7 +94,17 @@ What is worth recording regardless is the **shape** of the DOORS Next result: a 
 
 **Declare your prefixes.** OSLC query expects prefixes used in `oslc.where` and `oslc.select` to be declared with `oslc.prefix` unless the server supplies built-in defaults, and servers differ on which they supply. A server that cannot resolve a prefix may reject the query — or may discard the clause. *(This MCP server does not currently send `oslc.prefix` at all. That is a gap here, not a finding about ELM.)*
 
-**ETM advertised no query capabilities** in the service provider examined. Not yet retested outside a configuration-enabled project area.
+**ETM advertised no query capabilities** in the service provider examined — and that is almost certainly a gap in this client rather than a finding about ETM.
+
+[IBM's own ELM-Python-Client](https://github.com/IBM/ELM-Python-Client/blob/master/elmclient/examples/OSLCQUERY.md) documents ETM OSLC query in some detail: `oslc_qm:TestCaseQuery` is the **default project-level** query capability, there are **further capabilities at application level** — separate from project-scoped ones, so a scoped discovery never sees them — and **"component and configuration context matter"** when finding them. It also records real limits: only `AND` between `oslc.where` terms, no way to find resources *lacking* a property, and that ETM is "the least mature" of the three for query.
+
+So a zero here most likely means discovery looked in the wrong place, in this order of likelihood:
+
+1. **No component or configuration context** when reading the project area's `services.xml`. A configuration-enabled ETM project area need not advertise its capabilities without one.
+2. **Application-level capabilities are outside the project-area service provider**, so scoping to project areas excludes them by construction.
+3. The wrong catalog of the four ETM advertises — least likely, since catalogs are selected by domain predicate (quirk 2).
+
+Until this is settled, do not read the `0` above as "ETM cannot be queried", and do not compare this client's reach against another tool's on the strength of it.
 
 Tracked as [#1](https://github.com/OSLC/oslc-mcp-server/issues/1): probe each query capability, record `supported` / `unsupported` / **`ignored`**, and surface the answer where the caller will see it.
 

@@ -60,25 +60,50 @@ is why `describe_discovery` lists failed shapes separately.
 | Where tools come from | Built per ELM application | Derived from OSLC discovery |
 | Servers supported | ELM (DOORS Next, EWM, ETM) | Any conformant OSLC provider, ELM included |
 | A new domain | Ships when the vendor ships it | Appears as tools with no code change |
-| Write path | Governed change sets (DOORS Next) | `create_*` per factory, shape-validated; generic update and delete |
+| Write path | Creation through governed change sets | `create_*` per factory, shape-validated; generic update and delete |
 | Aggregate analysis | Planning risk, trends, blockers, dependencies | None — CRUD and query only |
-| MCP prompts | Ships prompts and agents | None |
-| Configuration context | Global configuration management | A `configurationContext` per service provider |
+| Configuration context | Global configuration management | A `configurationContext` per service provider — opaque, so any configuration including a global one whose DOORS Next contribution is a change set |
 | Behaviour of a given tool | Not stated in the material reachable here | `describe_discovery` names each tool and the URL it will hit |
 
-## Where AI Hub is ahead
+## The difference that matters: what a tool can reach
 
-Three genuine capability gaps in this project, not matters of polish:
+A vendor building tools for its own applications may use **any** interface those applications
+expose — OSLC, a native REST API, or a lifecycle index. A discovery-driven client is limited to
+**what the server advertises over OSLC**, and no more. Everything below follows from that.
 
-1. **Aggregate analysis.** Identifying trends, blockers and dependencies is reasoning over a
-   corpus. **OSLC advertisements describe no such capability, so no amount of discovery can
-   produce it.** Closing this gap means hand-writing tools — the approach AI Hub took.
-2. **Governed change sets.** Creating a requirement inside a change set is a DOORS Next
-   configuration-management concept. A per-provider `configurationContext` is a weaker
-   relative: it names the configuration requests resolve against, and does not model a
-   change set as a unit of governed work.
-3. **Prompts.** An assistant handed tools with no prompts must work out how to sequence
-   them. Shipping prompts is the cheapest gap here to close, and the most visible.
+### Aggregate analysis
+
+Identifying trends, blockers and dependencies is reasoning over a corpus. **OSLC advertisements
+describe no such capability, so no amount of discovery can produce it.** A server may of course
+expose an equivalent — a reporting index, a metrics API — but a client cannot find it by
+discovery, and nothing in the OSLC specifications requires one to exist. Closing this gap means
+hand-writing tools against a specific interface, which is the approach AI Hub took.
+
+### Where the advertisement is thinner than the application
+
+This is the sharper case, and it cuts both ways.
+
+An `oslc:QueryCapability` publishes `oslc:queryBase` and sometimes `oslc:resourceType`. It
+publishes nothing about which `oslc.where` operators work, whether `oslc.select` nests, whether
+`oslc.orderBy` is honoured, or how paging behaves — see
+[`elm-compatibility.md`](elm-compatibility.md). A vendor writing tools for its own application
+never faces this: it knows what its own server does. A discovery-driven client must either
+assume or measure, which is why
+[the capability probe](../../docs/superpowers/specs/2026-08-17-oslc-mcp-server-capability-probing-design.md)
+measures.
+
+**But a thin advertisement is not the same as a missing capability, and the two are easy to
+confuse.** Worked example, from this project's own findings: discovery recorded **no query
+capabilities for ETM**, which reads like an application that cannot be queried. It is not.
+[IBM's ELM-Python-Client](https://github.com/IBM/ELM-Python-Client/blob/master/elmclient/examples/OSLCQUERY.md)
+documents `oslc_qm:TestCaseQuery` as ETM's default project-level query capability, further
+capabilities at application level, and that *"component and configuration context matter"* when
+finding them. So the zero is very likely **this client's discovery gap, not an ETM limitation** —
+tracked in [`elm-compatibility.md`](elm-compatibility.md).
+
+The lesson generalises: **before concluding that a vendor's tools reach something OSLC discovery
+cannot, check that discovery was looking in the right place.** An honest comparison of reach
+requires the discovery side to be correct first.
 
 ## Where a discovery-driven server is ahead
 
@@ -95,27 +120,11 @@ Three genuine capability gaps in this project, not matters of polish:
    failed to fetch. This exists because the transformation from advertisement to tool has
    several steps, and a missing tool is otherwise silent.
 
-## The honest limitation of deriving tools
-
-A derived tool is only as good as the advertisement behind it, and OSLC advertisements are
-thin in a way that is easy to underestimate:
-
-- An `oslc:QueryCapability` publishes `oslc:queryBase` and sometimes `oslc:resourceType`. It
-  publishes nothing about which `oslc.where` operators work, whether `oslc.select` nests,
-  whether `oslc.orderBy` is honoured, or how paging behaves. See
-  [`elm-compatibility.md`](elm-compatibility.md).
-- A capability that advertises no `oslc:resourceType` leaves a client unable to tell which
-  types the query base serves. Observed on more than one server, including ours.
-
-This is the specification's gap rather than any product's, and it is why
-[the capability probe](../../docs/superpowers/specs/2026-08-17-oslc-mcp-server-capability-probing-design.md)
-measures behaviour instead of trusting advertisements. A vendor building tools per
-application never faces this problem: it knows what its own server does.
-
 ## Choosing
 
-- **ELM only, and the analysis capabilities matter** — AI Hub does things this project does
-  not, and closing that gap means writing them.
+- **ELM only, and the aggregate-analysis capabilities matter** — AI Hub does things this project
+  does not, and closing that gap means writing tools against a specific interface rather than
+  discovering them.
 - **Governed domains beyond ELM, or entitlement is the constraint, or the deployment must be
   self-hosted, or the tool surface has to be auditable** — that is what this project is for.
 
