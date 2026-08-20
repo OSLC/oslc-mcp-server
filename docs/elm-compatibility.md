@@ -84,7 +84,7 @@ Measured on one deployment, with an `oslc.where` chosen to match **nothing**:
 |---|---|---|---|
 | EWM | 2 | Returns work items | `400` — `oslc:Error … "Cannot reconstruct value"` |
 | DOORS Next | 8 | Returns members | `200`, **and the same members as unfiltered** |
-| ETM | **0** — see below; ETM *does* support query | — | — |
+| ETM | **15** (was 0 — see below) | not re-probed | not re-probed |
 
 > **Read these as observations, not as established product behaviour.** They were taken against **configuration-enabled** project areas, on a deployment whose configuration management was known to be misbehaving at the time, and **without supplying a `Configuration-Context`**. The requests also declared no **`oslc.prefix`** for the prefixes used in the filter. DOORS Next is expected to support `oslc.where`, so the most likely explanations are the missing configuration context or the undeclared prefix rather than the product. **The cause is not established.** This section will be revised once the same probes run against non-configuration-enabled project areas with prefixes declared.
 
@@ -94,17 +94,20 @@ What is worth recording regardless is the **shape** of the DOORS Next result: a 
 
 **Declare your prefixes.** OSLC query expects prefixes used in `oslc.where` and `oslc.select` to be declared with `oslc.prefix` unless the server supplies built-in defaults, and servers differ on which they supply. A server that cannot resolve a prefix may reject the query — or may discard the clause. *(This MCP server does not currently send `oslc.prefix` at all. That is a gap here, not a finding about ELM.)*
 
-**ETM advertised no query capabilities** in the service provider examined — and that is almost certainly a gap in this client rather than a finding about ETM.
+**ETM advertised no query capabilities — resolved: the service provider URI was stale.** The original run named a project area from a previous installation of the deployment. The server was rebuilt and every project-area id changed, so discovery was reading a URI that no longer identified anything.
 
-[IBM's own ELM-Python-Client](https://github.com/IBM/ELM-Python-Client/blob/master/elmclient/examples/OSLCQUERY.md) documents ETM OSLC query in some detail: `oslc_qm:TestCaseQuery` is the **default project-level** query capability, there are **further capabilities at application level** — separate from project-scoped ones, so a scoped discovery never sees them — and **"component and configuration context matter"** when finding them. It also records real limits: only `AND` between `oslc.where` terms, no way to find resources *lacking* a property, and that ETM is "the least mature" of the three for query.
+Re-run against the current JKE Banking quality-management project area, ETM advertises **15 query capabilities**, one per resource type:
 
-So a zero here most likely means discovery looked in the wrong place, in this order of likelihood:
+`TestCaseQuery`, `TestPlanQuery`, `TestExecutionRecordQuery`, `TestResultQuery`, `TestScriptQuery`, `TestSuiteQuery`, `TestSuiteResultQuery`, `TestScriptStepQuery`, `TestPhaseQuery`, `TestEnvironmentQuery`, `TestDataQuery`, `KeywordQuery`, `BuildRecordQuery`, `BuildDefinitionQuery`, and a default for `TestCase`.
 
-1. **No component or configuration context** when reading the project area's `services.xml`. A configuration-enabled ETM project area need not advertise its capabilities without one.
-2. **Application-level capabilities are outside the project-area service provider**, so scoping to project areas excludes them by construction.
-3. The wrong catalog of the four ETM advertises — least likely, since catalogs are selected by domain predicate (quirk 2).
+Note what this means for the question that prompted the re-test: **the artifacts a test engineer wants — execution records and results — are advertised as queryable over OSLC**, so `TestExecutionRecordQuery` and `TestResultQuery` are discoverable, not privileged. Whether the *filters* work is a separate question, and the point of the probe.
 
-Until this is settled, do not read the `0` above as "ETM cannot be queried", and do not compare this client's reach against another tool's on the strength of it.
+Two lessons worth more than the finding:
+
+1. **A stale service-provider URI presents as an absent capability, not as an error.** Nothing in the run failed. Discovery fetched, parsed, found no capabilities, and reported zero — which reads exactly like a server that cannot be queried. Any scoped configuration naming project areas by id is one rebuild away from this, and the report will state it as fact.
+2. **We nearly published it as a product characteristic.** The zero was on its way into a comparison with another vendor's tool before it was checked against [IBM's own client documentation](https://github.com/IBM/ELM-Python-Client/blob/master/elmclient/examples/OSLCQUERY.md), which documents ETM query capabilities plainly. Verify a negative discovery result against the vendor's own documentation before drawing a conclusion from it.
+
+For reference, the same run's factory counts: DOORS Next 12 factories but **2** create tools, ETM 13 factories / 13 tools, EWM 10 factories / 9 tools. The DOORS Next shortfall is correct behaviour, not a defect: ten of its factories are administrative — ReqIF import/export, `AttributeDefinition`, `AttributeType`, `ArtifactType`, `LinkType`, delivery and type-system-copy sessions — and create no shaped OSLC resource, so they advertise no `oslc:resourceShape` and no `create_*` tool is generated.
 
 Tracked as [#1](https://github.com/OSLC/oslc-mcp-server/issues/1): probe each query capability, record `supported` / `unsupported` / **`ignored`**, and surface the answer where the caller will see it.
 

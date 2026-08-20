@@ -92,18 +92,23 @@ assume or measure, which is why
 [the capability probe](../../docs/superpowers/specs/2026-08-17-oslc-mcp-server-capability-probing-design.md)
 measures.
 
-**But a thin advertisement is not the same as a missing capability, and the two are easy to
-confuse.** Worked example, from this project's own findings: discovery recorded **no query
-capabilities for ETM**, which reads like an application that cannot be queried. It is not.
-[IBM's ELM-Python-Client](https://github.com/IBM/ELM-Python-Client/blob/master/elmclient/examples/OSLCQUERY.md)
-documents `oslc_qm:TestCaseQuery` as ETM's default project-level query capability, further
-capabilities at application level, and that *"component and configuration context matter"* when
-finding them. So the zero is very likely **this client's discovery gap, not an ETM limitation** —
-tracked in [`elm-compatibility.md`](elm-compatibility.md).
+**But a thin advertisement is not the same as a missing capability, and neither is a bad question.**
+Worked example from this project's own findings, now resolved: discovery recorded **no query
+capabilities for ETM**, which reads like an application that cannot be queried. It was not.
+The service provider URI was **stale** — the deployment had been rebuilt and every project-area
+id changed. Re-run against the current project area, ETM advertises **15 query capabilities**,
+including `TestExecutionRecordQuery` and `TestResultQuery`.
+
+That materially changes the comparison. The test-management capabilities described for AI Hub —
+retrieving failed execution records, correlating them with test cases and tracing them to
+requirements — rest on artifacts ETM **advertises as queryable over OSLC**. They are discoverable,
+not privileged.
 
 The lesson generalises: **before concluding that a vendor's tools reach something OSLC discovery
-cannot, check that discovery was looking in the right place.** An honest comparison of reach
-requires the discovery side to be correct first.
+cannot, check that discovery was looking in the right place.** A stale URI, a missing
+configuration context or an unscoped application-level capability all present as an absent
+capability rather than as an error. An honest comparison of reach requires the discovery side to
+be correct first — and in the one case tested here, it was not.
 
 ## Where a discovery-driven server is ahead
 
