@@ -43,6 +43,8 @@ CLI overrides environment variables.
 Copy [`oslc-mcp-server.example.yaml`](oslc-mcp-server.example.yaml) to `oslc-mcp-server.yaml` and edit. **The real file is git-ignored** — it names a specific deployment and may carry credentials; only the example is committed.
 
 ```yaml
+reportPath: ./oslc-discovery.md                  # optional — top level, not per server
+
 servers:
   - alias: dng                                   # required, unique
     baseUrl: https://elm.example.com/rm          # required
@@ -59,6 +61,7 @@ servers:
 
 | Field | Required | Default |
 |---|---|---|
+| `reportPath` | no | `./oslc-discovery.md`. **Top level**, not per server — see [the discovery report](#the-discovery-report) |
 | `alias` | yes | — must be unique across servers |
 | `baseUrl` | yes | — |
 | `catalogUrl` | no | discovered from `rootservices` |
@@ -164,11 +167,28 @@ header and return whatever representation it chooses, so the result records only
 on that request -- never what it is able to produce. An `application/rdf+xml` response to a Turtle
 request is conformant behaviour, not a fault.
 
-`reportPath` writes the same content `describe_discovery` returns to a file, on every start
-(default `./oslc-discovery.md`, one section per configured server). A tool cannot answer the question
-it is most needed for -- a server that started and generated the wrong tools, or none -- so the file
-is written whether or not a client asks. It carries no timestamp, so an unchanged deployment produces
-an identical file, and is small enough to hand to an assistant as context for what the tools can do.
+### The discovery report
+
+Every start writes the same content `describe_discovery` returns to a file — `reportPath`, default
+`./oslc-discovery.md`, one section per configured server, rewritten each run so it always describes
+the live tool set.
+
+A file rather than only a tool, because **a tool cannot answer the question it is most needed for**:
+a server that started and generated the wrong tools, or none at all. Nothing is there to call.
+
+```
+[discovery] Scoped discovery complete: 1/1 providers, 13 factories, 13 shapes from 13 document(s)
+[rebuild] etm: 13 per-type tools, 1 resources
+[report] wrote ./oslc-discovery.md (79 lines, 1 server)
+```
+
+It carries **no timestamp**, so an unchanged deployment produces a byte-identical file and a diff
+shows only what actually changed — which is what makes it usable as committed context describing
+what the tools can do. A scoped server costs a few hundred tokens; beyond 25 service providers the
+report says how many it left out rather than growing without bound.
+
+The default path is git-ignored as a runtime artifact. To keep one under version control, point
+`reportPath` at a deliberate location such as `docs/discovery-<deployment>.md`.
 
 ### Further reading
 

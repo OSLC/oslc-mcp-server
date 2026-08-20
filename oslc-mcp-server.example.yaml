@@ -37,9 +37,11 @@
 # returns. A file is written whether or not any client asks, because the case
 # it is most wanted for is a server that started and produced the wrong tools.
 # Small enough (a few hundred tokens per scoped server) to hand to an assistant
-# as context for what these tools can actually do.
-#
-# reportPath: ./oslc-discovery.md
+# as context for what these tools can actually do. Shown here at its default, so
+# commenting it out changes nothing; point it somewhere deliberate to keep one
+# under version control.
+
+reportPath: ./oslc-discovery.md
 
 servers:
   - alias: dng
