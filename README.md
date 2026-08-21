@@ -190,12 +190,34 @@ report says how many it left out rather than growing without bound.
 The default path is git-ignored as a runtime artifact. To keep one under version control, point
 `reportPath` at a deliberate location such as `docs/discovery-<deployment>.md`.
 
+### Alongside IBM Engineering AI Hub
+
+IBM ships an MCP endpoint for ELM too, and the two are more complementary than competing. AI Hub's
+tools are **written per application**; these are **derived from what a server advertises over OSLC**.
+That produces opposite strengths:
+
+|  | AI Hub 1.3 | `oslc-mcp-server` |
+|---|---|---|
+| Reach | ELM only, including Rhapsody SysML v2 models | any conformant OSLC provider |
+| Writes | read-mostly — 8 of 42 tools write; one creates an artifact, none updates or deletes | a `create_*` per advertised creation factory, plus generic update and delete |
+| Beyond artifacts | folders, categories, releases, iterations, users, and configuration/stream resolution | none of these — OSLC advertises no such capability |
+| Cost | separate entitlement | ELM licences only; self-hosted |
+
+**An assistant can be configured with both**, and there is a reason to: AI Hub answers the questions
+OSLC does not advertise — which stream is current, what the folder structure is, who a user is,
+what a SysML v2 model contains — while this server creates and updates artifacts in ETM and EWM,
+where AI Hub has no create tool at all, and reaches governed domains outside ELM entirely. Tool names
+are namespaced per server on both sides, so the surfaces do not collide.
+
+[Full comparison](docs/comparison-ibm-engineering-ai-hub.md), including what neither inventory tells
+you: what its search filters actually do.
+
 ### Further reading
 
 - [Using `oslc-mcp-server` with IBM ELM](docs/elm-compatibility.md) — how ELM behaves as an OSLC
   provider, and the quirks that fail silently rather than with an error.
-- [`oslc-mcp-server` and IBM Engineering AI Hub 1.3](docs/comparison-ibm-engineering-ai-hub.md) — a
-  capability comparison between deriving tools from OSLC discovery and building them per application.
+- [`oslc-mcp-server` and IBM Engineering AI Hub 1.3](docs/comparison-ibm-engineering-ai-hub.md) — the
+  capability comparison summarised above, with the measured figures behind it.
 
 ## Architecture
 
