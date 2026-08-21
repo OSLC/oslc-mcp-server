@@ -1,5 +1,6 @@
 import type { DiscoveryResult, DiscoveredServiceProvider, DiscoveredFactory } from 'oslc-service/mcp';
 import type { CatalogResolution } from './catalog-resolution.js';
+import { createToolName } from 'oslc-service/mcp';
 
 /**
  * Everything `describe_discovery` reports on for one server (design §4).
@@ -24,19 +25,6 @@ export interface DescribeDiscoveryInput {
 /** Providers enumerated before the report summarises the remainder. */
 export const DEFAULT_MAX_PROVIDERS = 25;
 
-/**
- * Mirror of tool-factory.ts's sanitizeName. Duplicated deliberately: this
- * report must state the name the tool factory *will* produce, so if the two
- * ever diverge the report should show the divergence rather than hide it by
- * sharing an implementation.
- */
-function sanitizeName(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[\s-]+/g, '_')
-    .replace(/[^a-z0-9_]/g, '');
-}
-
 function describeCatalogSource(catalog: CatalogResolution): string {
   switch (catalog.source.kind) {
     case 'explicit':
@@ -56,8 +44,10 @@ function describeProvider(sp: DiscoveredServiceProvider, prefix: string): string
     for (const factory of sp.factories as DiscoveredFactory[]) {
       // generateTools emits a create tool only when a shape is present, so a
       // shapeless factory is a tool that silently does not exist.
+      // the SAME function the tool factory uses, so this report cannot name a
+      // tool the server does not generate.
       const tool = factory.shape
-        ? `${prefix}create_${sanitizeName(factory.title)}`
+        ? `${prefix}${createToolName(factory.title, factory.resourceType)}`
         : 'no tool generated (no shape)';
       lines.push(`- ${factory.title} — \`${tool}\` → ${factory.creationURI || '(no creation URI)'}`);
       lines.push(`  - resource type: ${factory.resourceType || '(none)'}`);

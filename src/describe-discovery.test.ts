@@ -1,5 +1,6 @@
 import { describe, it, expect } from '@jest/globals';
 import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
+import { createToolName } from 'oslc-service/mcp';
 import type { DiscoveryResult } from 'oslc-service/mcp';
 
 const SP = 'https://elm.example.com/rm/sp/1';
@@ -184,3 +185,48 @@ describe('the report document', () => {
     expect(out.endsWith('\n\n')).toBe(false);
   });
 });
+
+describe('generated tool names', () => {
+  // every title below was observed on a real server: ELM 7.1 SR1 (DOORS Next,
+  // ETM, EWM) and a genOSLC owned domain.
+  const CASES: Array<[string, string | undefined, string]> = [
+    ['Create Finding',                                  undefined, 'create_finding'],
+    ['Create CapabilityLevelResult',                    undefined, 'create_capabilitylevelresult'],
+    ['Default creation factory for TestCase',           undefined, 'create_testcase'],
+    ['Default creation factory for TestSuiteExecutionRecord', undefined, 'create_testsuiteexecutionrecord'],
+    ['Location for creation of Defect change requests ', undefined, 'create_defect'],
+    ['Location for creation of Track Build Item change requests ', undefined, 'create_track_build_item'],
+    ['Location for creation of draft change requests',   undefined, 'create_draft'],
+    ['Requirement Creation Factory',                     undefined, 'create_requirement'],
+    ['Collection Creation Factory',                      undefined, 'create_collection'],
+    ['ReqIF Export Factory',                             undefined, 'create_reqif_export'],
+    ['Delivery Session Factory',                          undefined, 'create_delivery_session'],
+    ['Type System Copy Session Factory',                  undefined, 'create_type_system_copy_session'],
+    ['AttributeDefinition Factory',                       undefined, 'create_attributedefinition'],
+    // the suffix is stripped only when something precedes it, so a title that is
+    // nothing but the suffix keeps its own words — a better name than the type's.
+    ['Location for creation of change requests', 'http://open-services.net/ns/cm#ChangeRequest', 'create_change_requests'],
+  ];
+
+  it.each(CASES)('%s -> %s', (title, resourceType, expected) => {
+    expect(createToolName(title, resourceType)).toBe(expected);
+  });
+
+  it('never yields create__ or a bare create_ for an unusable title', () => {
+    // the resource type is the first fallback, the raw title the second, and
+    // 'resource' the last — none of them may leave a dangling underscore.
+    expect(createToolName('   ')).toBe('create_resource');
+    expect(createToolName('   ', 'http://example.org/v#Widget')).toBe('create_widget');
+    expect(createToolName('- / -')).toBe('create_resource');
+    expect(createToolName('Factory')).toBe('create_factory');
+  });
+
+  it('is the function the report uses, so the report cannot name a phantom tool', () => {
+    const out = describeDiscovery({
+      alias: 'rm', prefix: 'rm_', discovery: discoveryWith(),
+      catalog: { url: 'https://elm.example.com/rm/catalog', source: { kind: 'explicit' } } as any,
+    });
+    expect(out).toContain(`rm_${createToolName('Requirement')}`);
+  });
+});
+
