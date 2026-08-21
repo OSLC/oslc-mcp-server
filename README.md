@@ -167,6 +167,38 @@ header and return whatever representation it chooses, so the result records only
 on that request -- never what it is able to produce. An `application/rdf+xml` response to a Turtle
 request is conformant behaviour, not a fault.
 
+### Measuring what a server actually implements — `probe_oslc`
+
+`probe_oslc` answers "what does this server's OSLC Query actually do?". A capability is advertised
+without saying which of it works: an `oslc:QueryCapability` publishes a `queryBase` and nothing about
+which `oslc.where` operators exist, whether `oslc.select` nests, whether `oslc.orderBy` is honoured,
+or how paging behaves. The probe creates a small fixture, queries it, updates it and removes it, and
+records what the server did — with every HTTP exchange kept as evidence.
+
+Read the verdicts carefully. **`ignored` is the one that matters**: a `200` means the parameter
+parsed, not that it did anything, and a server that accepts `oslc.where` and returns the unfiltered
+set is the failure a status code cannot show you. `inconclusive` is not a failure either — it is the
+run saying what it could not settle, with what a correct result would have looked like so you can
+check it against the server's own UI.
+
+**What it writes.** Only resources it creates and marks `PROBE-`, only in the service provider you
+name, and it deletes them again — anything it cannot delete is reported with its URI rather than left
+silently behind. It never modifies pre-existing content. If the server does not support DELETE it
+stops and asks, because leaving a permanently populated project area and accepting weaker
+verification are both defensible and neither should be chosen for you (`onDeleteUnsupported`).
+
+**A read-only run measures materially less.** Where a service provider advertises no creation
+factory, or refuses a create, the probe samples ground truth from existing content instead. Filters
+are still measured by identity, but three things cannot be: properties dropped on create, whether an
+update is visible to query, and whether a created resource is visible to query at all. The report
+names them as not measured rather than omitting them.
+
+**Triage is yours.** The probe records mechanical facts and leaves six empty categories for a person
+to sort them into. Whether a missing capability is a conformant choice or something to raise is a
+judgement about the specification — and conflating the two wastes a vendor's time while costing the
+reports that *are* worth raising their credibility. A server that does not implement `oslc.orderBy`
+has done nothing wrong.
+
 ### The discovery report
 
 Every start writes the same content `describe_discovery` returns to a file — `reportPath`, default

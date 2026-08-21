@@ -31,6 +31,8 @@ import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
 import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
 import { DEFAULT_REPORT_PATH } from './config-file.js';
+import { runProbe } from './probe/orchestrate.js';
+import { formatProbeReport } from './probe/report.js';
 import { writeFileSync } from 'node:fs';
 import { checkTurtleSupport, formatTurtleCheck, type HttpGetter } from './representation.js';
 
@@ -178,6 +180,25 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
     description:
       'Report what OSLC discovery found for this server and which URL each generated tool will actually hit: the catalog URL and how it was resolved, every service provider, every creation factory and query capability, and every resource shape that failed to fetch. Read-only — makes no requests. Use it when a tool is missing or appears to reach the wrong place.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'probe_oslc',
+    description:
+      'Measure what this server actually implements of OSLC Query, by creating a small fixture, querying it, and removing it again. Where the server cannot be written to, it queries existing content instead and reports which measurements it could not make. Records every HTTP exchange as evidence. Writes only resources it creates and marks PROBE-, and deletes them; it never modifies pre-existing content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serviceProviderURI: { type: 'string', description: 'Service provider to probe. Defaults to the first discovered.' },
+        queryBase: { type: 'string', description: 'Query capability base to probe. Defaults to the first advertised by that service provider.' },
+        onDeleteUnsupported: {
+          type: 'string',
+          enum: ['stop', 'proceed', 'read-only'],
+          description: 'What to do if the server does not support DELETE: stop and report (default), proceed and accept a permanently populated target, or fall back to read-only.',
+        },
+        reportPath: { type: 'string', description: 'File path to write the full report, transcripts included.' },
+      },
+      required: [],
+    },
   },
   {
     name: 'check_turtle_support',
@@ -525,6 +546,47 @@ export async function startServer(
               discovery: runtime.discovery,
             });
             break;
+          case 'probe_oslc': {
+            const probeArgs = (args ?? {}) as {
+              serviceProviderURI?: string; queryBase?: string;
+              onDeleteUnsupported?: 'stop' | 'proceed' | 'read-only'; reportPath?: string;
+            };
+            const target = probeArgs.serviceProviderURI
+              ? runtime.discovery.serviceProviders.find((p) => p.uri === probeArgs.serviceProviderURI)
+              : runtime.discovery.serviceProviders[0];
+            if (!target) {
+              result = probeArgs.serviceProviderURI
+                ? `No discovered service provider matches ${probeArgs.serviceProviderURI}. Call read_catalog to see what was found.`
+                : 'No service provider was discovered, so there is nothing to probe.';
+              break;
+            }
+            const probeBase = probeArgs.queryBase ?? target.queries[0]?.queryBase;
+            if (!probeBase) {
+              result = `${target.title} advertises no query capability, so there is no query to measure.`;
+              break;
+            }
+            // Neither outcome of an unsupported delete is decided by default
+            // (§5.7): stopping leaves the caller to choose between residue and
+            // weaker verification, and that is their call rather than this tool's.
+            const probeRun = await runProbe({
+              http: (client as any).client,
+              sp: target,
+              queryBase: probeBase,
+              onDeleteUnsupported: probeArgs.onDeleteUnsupported ?? 'stop',
+              manifestWrite: (line: string) => console.error(`[probe:manifest] ${line}`),
+            });
+            const probeReport = formatProbeReport(probeRun);
+            if (probeArgs.reportPath) {
+              try {
+                writeFileSync(probeArgs.reportPath, probeReport, 'utf8');
+                console.error(`[probe] wrote ${probeArgs.reportPath}`);
+              } catch (err) {
+                console.error(`[probe] could not write ${probeArgs.reportPath}:`, err instanceof Error ? err.message : err);
+              }
+            }
+            result = probeReport;
+            break;
+          }
           case 'check_turtle_support': {
             const turtleArgs = (args ?? {}) as { uri?: string };
             const target = turtleArgs.uri || config.catalogURL;
