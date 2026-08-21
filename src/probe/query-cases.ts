@@ -262,29 +262,52 @@ export async function casePaging(ctx: CaseContext): Promise<CaseResult> {
 
   const members = memberURIs(response.body, ctx.queryBase);
   const hasNextPage = /nextPage/.test(response.body);
+  const transcripts = [response.transcript];
+
+  // No paging at all: everything came back regardless of the parameter.
   if (members.length === ctx.truth.baseline.length) {
     return {
       name: 'paging',
       verdict: 'ignored',
       reason: `the whole baseline of ${members.length} was returned despite oslc.pageSize=${pageSize}`,
-      transcripts: [response.transcript],
+      transcripts,
     };
   }
-  if (members.length !== pageSize) {
+
+  // Fewer members than the baseline and no way to reach the rest. This is the
+  // only genuinely unsupported case: the collection is truncated, not paged.
+  if (!hasNextPage) {
     return {
       name: 'paging',
       verdict: 'unsupported',
-      reason: `${members.length} member(s) returned for a page size of ${pageSize}`,
-      transcripts: [response.transcript],
+      reason: `${members.length} of ${ctx.truth.baseline.length} member(s) returned with no oslc:nextPage, ` +
+        'so the rest cannot be reached',
+      transcripts,
     };
   }
+
+  // A page of the size asked for, and a link to the next.
+  if (members.length === pageSize) {
+    return {
+      name: 'paging',
+      verdict: 'supported',
+      reason: `the page held ${pageSize} members and offered oslc:nextPage`,
+      transcripts,
+    };
+  }
+
+  // Paged, but at a size the server chose rather than the one requested — an
+  // administrator-configured page size, which OSLC permits. Paging works and
+  // every member is reachable; the parameter was accepted and disregarded, which
+  // is what `ignored` means. Calling this unsupported would report a working
+  // capability as missing; calling it supported would hide that a client cannot
+  // size its own pages.
   return {
     name: 'paging',
-    verdict: hasNextPage ? 'supported' : 'unsupported',
-    reason: hasNextPage
-      ? `the page held ${pageSize} members and offered oslc:nextPage`
-      : `the page held ${pageSize} members but offered no oslc:nextPage, so the rest cannot be reached`,
-    transcripts: [response.transcript],
+    verdict: 'ignored',
+    reason: `the page held ${members.length} members for oslc.pageSize=${pageSize}, with oslc:nextPage: ` +
+      'the server pages at a size it chooses',
+    transcripts,
   };
 }
 

@@ -125,6 +125,33 @@ Falling back to the `${baseUrl}/oslc/catalog` convention when no catalog predica
 
 This is a generic-framework error in how it produces the Turtle representation of its rootservices document. For ELM applications, it's best to use Accept=application/rdf+xml, many do not support Turtle at all. 
 
+### 10. EWM types a change request with `dcterms:type`, not `rdf:type`
+
+**A `oslc_cm:ChangeRequest` in EWM does not carry its specific type — Defect, Story, Task, Epic, Feature — as an `rdf:type`.** It carries it as **`dcterms:type`**, a plain literal. Every work item is `rdf:type oslc_cm:ChangeRequest` and nothing narrower.
+
+This is not conformant with OSLC 2.0 or 3.0, and it is not an accident. It is how **OSLC 1.0** modelled resource types — the pre-OASIS specifications IBM had already implemented and shipped — and it was kept for backward compatibility when the work moved to OASIS. A standard for tool integration could not credibly ask its implementors to break every existing client three times, at 1.0, 2.0 and 3.0. So the older shape survives where changing it would have broken deployed integrations, and this is one of those places.
+
+Consequences for a client, all of them silent:
+
+- **`oslc.where=rdf:type=oslc_cm:Defect` matches nothing**, and returns `200` with an empty result rather than an error. The filter is well-formed and the property genuinely absent. Filter on `dcterms:type` instead — and note it is a *literal*, so the comparison is `dcterms:type="Defect"`, not a URI.
+- **Discovery cannot tell you the work-item types.** They are not in the type system as classes, so a client that enumerates types from `rdf:type` sees one type where the project area has a dozen.
+- **A resource created without `dcterms:type`** may land as whatever the project area defaults to. A `create_*` tool whose input schema came from an `oslc:ResourceShape` will not necessarily prompt for it, because the shape describes `ChangeRequest` and the discriminator is a value rather than a class.
+
+Worth knowing generally: where an ELM behaviour looks like a plain standards violation, check the 1.0 specifications before treating it as a fault. Several are deliberate compatibility decisions, and reporting them as defects wastes everyone's time.
+
+### 11. Paging parameters may be ignored in favour of a server-configured page size
+
+**`oslc.pageSize` is a request, not an instruction.** A server may page at a size its administrator configured and disregard the one asked for — returning, say, 50 members for `oslc.pageSize=2`, with a perfectly good `oslc:nextPage`.
+
+Nothing is broken there. The collection *is* paged and every member *is* reachable; only the size is not the client's to choose. But it is easy to measure wrongly, in both directions:
+
+- Reading "50 returned, 2 requested" as **broken paging** reports a capability as missing when it is present and working.
+- Reading it as **paging supported** hides the fact that a client cannot control the page size, which matters to anything sizing its own batches or estimating a fetch.
+
+The honest verdict is that the parameter was **ignored**: accepted, and something other than what was asked for happened. That is the distinction OSLC's own permissiveness forces — the specification lets a server decline `oslc.pageSize` — and it is why `probe_oslc` treats `ignored` as a first-class outcome rather than a shade of failure.
+
+`probe_oslc` reports it that way: `ignored` where the page came back at a size the server chose *and* `oslc:nextPage` was offered, and `unsupported` only where fewer members came back than the baseline with **no** `oslc:nextPage` — the one case in which the rest genuinely cannot be reached.
+
 ### 9. No per-type `query_<type>` tools are generated for any application
 
 Discovery finds query capabilities — 8 in DOORS Next, 2 in EWM — but tool generation produces only `create_*` tools from creation factories. Querying is therefore possible only through the generic `query_resources` tool, which requires the caller to supply a `queryBase` URI it has no way to discover from the tool schema alone.

@@ -123,4 +123,41 @@ describe('casePaging', () => {
     expect(result.verdict).toBe('inconclusive');
     expect(result.expected).toBeDefined();
   });
+
+  /** A page of `n` members plus a next-page link. */
+  function pageBody(uris: string[]): string {
+    return membersBody(uris).replace(
+      '</rdf:Description>',
+      '<oslc:nextPage xmlns:oslc="http://open-services.net/ns/core#" ' +
+      `rdf:resource="${QUERY_BASE}?oslc.pageNo=1"/></rdf:Description>`
+    );
+  }
+
+  it('is supported when the page is the size asked for and offers a next page', async () => {
+    const result = await casePaging(ctx(scriptedHttp([pageBody([R(1), R(2)])]), truthOf(5)));
+    expect(result.verdict).toBe('supported');
+  });
+
+  it('is ignored, not unsupported, when the server pages at a size it chose', async () => {
+    // an administrator-configured page size: paging works and every member is
+    // reachable, but the parameter was disregarded. Reporting this unsupported
+    // would call a working capability missing.
+    const result = await casePaging(ctx(scriptedHttp([pageBody([R(1), R(2), R(3), R(4)])]), truthOf(9)));
+    expect(result.verdict).toBe('ignored');
+    expect(result.reason).toMatch(/size it chooses/);
+    expect(result.reason).toContain('4 members');
+  });
+
+  it('is unsupported only when the result is truncated with no way to reach the rest', async () => {
+    const result = await casePaging(ctx(scriptedHttp([membersBody([R(1), R(2)])]), truthOf(9)));
+    expect(result.verdict).toBe('unsupported');
+    expect(result.reason).toMatch(/cannot be reached/);
+  });
+
+  it('is ignored when the whole baseline comes back despite the parameter', async () => {
+    const all = [R(1), R(2), R(3), R(4), R(5)];
+    const result = await casePaging(ctx(scriptedHttp([membersBody(all)]), truthOf(5)));
+    expect(result.verdict).toBe('ignored');
+    expect(result.reason).toMatch(/whole baseline/);
+  });
 });
