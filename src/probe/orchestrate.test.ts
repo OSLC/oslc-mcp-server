@@ -218,6 +218,28 @@ describe('runProbe', () => {
     expect(http.calls.filter(isCreate)).toHaveLength(1);
   });
 
+  it('falls back to GET for every case once POST-query is refused', async () => {
+    // otherwise a server refusing POST fails every later case with the same 405,
+    // burying one finding under ten false ones.
+    const isPostQuery = (c: any) => c.method === 'POST' && String(c.url).includes('/views');
+    const http = ruledHttp([
+      [isPostQuery, { status: 405, data: 'Method Not Allowed' }],
+      [isQuery, { status: 200, data: membersBody([R(1), R(2), R(3)]) }],
+    ]);
+    const run = await runProbe({
+      http, sp: sp({ factories: [] } as any), queryBase: QUERY_BASE,
+      onDeleteUnsupported: 'stop', manifestWrite: noop,
+    });
+
+    const method = run.cases.find((c) => c.name === 'post-versus-get')!;
+    expect(method.reason).toMatch(/POST answered 405 while GET answered 200/);
+
+    // the baseline was still established, so the later cases are not all 405
+    const bare = run.cases.find((c) => c.name === 'bare-query')!;
+    expect(bare.verdict).toBe('supported');
+    expect(run.cases.filter((c) => /405/.test(c.reason))).toHaveLength(1);
+  });
+
   it('records every fixture URI in the manifest before creating it', async () => {
     const lines: string[] = [];
     await runProbe({

@@ -72,4 +72,16 @@ describe('formatProbeReport', () => {
   it('includes the transcripts', () => {
     expect(formatProbeReport(run())).toContain('POST /views');
   });
+
+  it('omits transcript bodies when the caller asked for a summary, and says where to get them', () => {
+    // a run over hundreds of members produces megabytes of exchange: evidence in
+    // a file, noise in a tool result.
+    const summary = formatProbeReport(run(), { transcripts: false });
+    expect(summary).not.toContain('POST /views');
+    expect(summary).toMatch(/exchange\(s\) recorded/);
+    expect(summary).toMatch(/reportPath/);
+    // the findings themselves must survive the omission
+    expect(summary).toContain('where-identity');
+    expect(summary).toMatch(/## Triage/);
+  });
 });

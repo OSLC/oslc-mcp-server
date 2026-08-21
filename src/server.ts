@@ -575,16 +575,18 @@ export async function startServer(
               onDeleteUnsupported: probeArgs.onDeleteUnsupported ?? 'stop',
               manifestWrite: (line: string) => console.error(`[probe:manifest] ${line}`),
             });
-            const probeReport = formatProbeReport(probeRun);
+            // The file carries the transcripts; the tool result carries the
+            // findings. A run over a provider with hundreds of members produces
+            // megabytes of exchange, which is evidence on disk and noise here.
             if (probeArgs.reportPath) {
               try {
-                writeFileSync(probeArgs.reportPath, probeReport, 'utf8');
+                writeFileSync(probeArgs.reportPath, formatProbeReport(probeRun), 'utf8');
                 console.error(`[probe] wrote ${probeArgs.reportPath}`);
               } catch (err) {
                 console.error(`[probe] could not write ${probeArgs.reportPath}:`, err instanceof Error ? err.message : err);
               }
             }
-            result = probeReport;
+            result = formatProbeReport(probeRun, { transcripts: false });
             break;
           }
           case 'check_turtle_support': {

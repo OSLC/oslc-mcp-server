@@ -1,5 +1,5 @@
 import type { DiscoveredServiceProvider } from 'oslc-service/mcp';
-import { probeGet, probeQueryPost, type ProbeHttp } from './request.js';
+import { probeGet, probeQueryGet, probeQueryPost, type ProbeHttp } from './request.js';
 import {
   chooseFixtureType,
   createManifest,
@@ -22,6 +22,23 @@ import {
   caseWhereIdentity,
   type CaseContext,
 } from './query-cases.js';
+
+/**
+ * Which method the remaining cases must use.
+ *
+ * POST-form query is the primary form (§6.3), but whether it works is itself a
+ * case — and a server that refuses it would otherwise fail every later case with
+ * the same 405, burying one finding under ten false ones. So case 2 runs first
+ * and its answer configures the rest.
+ */
+async function detectUsePost(
+  http: ProbeHttp,
+  queryBase: string
+): Promise<{ usePost: boolean; caseResult: CaseResult }> {
+  const caseResult = await casePostVersusGet({ http, queryBase, usePost: true, truth: emptyTruth() });
+  const postRefused = /POST answered \d+ while GET answered/.test(caseResult.reason);
+  return { usePost: !postRefused, caseResult };
+}
 
 export type ProbeMode = 'fixture' | 'read-only';
 
@@ -116,7 +133,8 @@ async function readBackGroundTruth(
 
 /** Every case, in order, flattened — the ones returning lists included. */
 async function runCases(ctx: CaseContext): Promise<CaseResult[]> {
-  const single = [caseBareGet, casePostVersusGet, caseWhereIdentity, caseNegationPair,
+  // casePostVersusGet is run by detectUsePost before this, so it is not repeated.
+  const single = [caseBareGet, caseWhereIdentity, caseNegationPair,
                   caseSelect, caseOrderBy, casePaging, caseSearchTerms];
   const results: CaseResult[] = [];
   for (const one of single) results.push(await one(ctx));
@@ -154,12 +172,10 @@ export async function runProbe(args: {
 
   const readOnly = async (modeReason: string, deleteSupported: boolean | null): Promise<ProbeRun> => {
     // Phases 4 and 7 only, with ground truth sampled from what is already there.
-    const baselineCase = await caseBareGet({ http, queryBase, usePost: true, truth: emptyTruth() });
-    const baseline = baselineCase.transcripts.length
-      ? memberURIs(await bodyOf(http, queryBase), queryBase)
-      : [];
+    const { usePost, caseResult: methodCase } = await detectUsePost(http, queryBase);
+    const baseline = memberURIs(await bodyOf(http, queryBase, usePost), queryBase);
     const truth = await sampleGroundTruth(http, baseline);
-    const cases = await runCases({ http, queryBase, truth, usePost: true });
+    const cases = [methodCase, ...(await runCases({ http, queryBase, truth, usePost }))];
     return { mode: 'read-only', modeReason, serviceProvidersWritten, cases, needingCleanup, deleteSupported };
   };
 
@@ -225,16 +241,19 @@ export async function runProbe(args: {
   const { truth, dropped } = await readBackGroundTruth(http, created);
 
   // ── Phase 4: is the fixture visible to query at all, before judging filters? ──
-  const unfiltered = await probeQueryPost(http, queryBase, []);
+  const { usePost, caseResult: methodCase } = await detectUsePost(http, queryBase);
+  const unfiltered = usePost
+    ? await probeQueryPost(http, queryBase, [])
+    : await probeQueryGet(http, queryBase, []);
   const visibleMembers = memberURIs(unfiltered.body, queryBase);
   const fixtureVisibleToQuery = created.some((c) => visibleMembers.includes(c.uri));
 
   const cases: CaseResult[] = fixtureVisibleToQuery
-    ? await runCases({ http, queryBase, truth, usePost: true })
-    : allInconclusive(
+    ? [methodCase, ...(await runCases({ http, queryBase, truth, usePost }))]
+    : [methodCase, ...allInconclusive(
         'fixture not visible to query',
         'the resources just created appear among the query base members'
-      );
+      )];
 
   for (const drop of dropped) {
     cases.push({
@@ -265,6 +284,9 @@ function emptyTruth(): GroundTruth {
   return { kind: 'sampled', resources: [], baseline: [] };
 }
 
-async function bodyOf(http: ProbeHttp, queryBase: string): Promise<string> {
-  return (await probeQueryPost(http, queryBase, [])).body;
+async function bodyOf(http: ProbeHttp, queryBase: string, usePost: boolean): Promise<string> {
+  const response = usePost
+    ? await probeQueryPost(http, queryBase, [])
+    : await probeQueryGet(http, queryBase, []);
+  return response.body;
 }

@@ -44,7 +44,15 @@ function table(cases: CaseResult[]): string[] {
  * the run's explicit handover of what it could not settle, and is what a
  * read-only report is chiefly for.
  */
-export function formatProbeReport(run: ProbeRun): string {
+export function formatProbeReport(
+  run: ProbeRun,
+  options: { transcripts?: boolean } = {}
+): string {
+  // §10: the caller gets a summary, the file gets everything. A run against a
+  // provider with hundreds of members produces megabytes of transcript, which is
+  // evidence in a file and unreadable as a tool result — and would crowd out the
+  // findings it exists to support.
+  const withTranscriptBodies = options.transcripts !== false;
   const lines: string[] = ['# OSLC capability probe', ''];
 
   if (run.mode === 'read-only') {
@@ -113,6 +121,13 @@ export function formatProbeReport(run: ProbeRun): string {
   lines.push('## Transcripts', '');
   if (withTranscripts.length === 0) {
     lines.push('_No requests were recorded._', '');
+  } else if (!withTranscriptBodies) {
+    const total = withTranscripts.reduce((n, c) => n + c.transcripts.length, 0);
+    lines.push(
+      `_${total} exchange(s) recorded across ${withTranscripts.length} case(s), omitted here._`,
+      '_Pass `reportPath` to write them: they are the evidence a finding rests on._',
+      ''
+    );
   } else {
     for (const c of withTranscripts) {
       lines.push(`### ${c.name}`, '');
