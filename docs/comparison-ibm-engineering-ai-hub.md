@@ -18,6 +18,8 @@ on 2026-08-20, scoped to one project area per application.
 
 ## What AI Hub provides — 42 tools
 
+**AI Hub 1.3; tool topics dated 2026-06-18.** The counts below are of that release and no other.
+
 | Domain | Tools | Of which write |
 |---|---|---|
 | Common, cross-application | 9 | 3 |

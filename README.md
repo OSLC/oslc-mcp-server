@@ -196,7 +196,7 @@ IBM ships an MCP endpoint for ELM too, and the two are more complementary than c
 tools are **written per application**; these are **derived from what a server advertises over OSLC**.
 That produces opposite strengths:
 
-|  | AI Hub 1.3 | `oslc-mcp-server` |
+| | AI Hub **1.3** (tool inventory dated 2026-06-18) | `oslc-mcp-server` |
 |---|---|---|
 | Reach | ELM only, including Rhapsody SysML v2 models | any conformant OSLC provider |
 | Writes | read-mostly — 8 of 42 tools write; one creates an artifact, none updates or deletes | a `create_*` per advertised creation factory, plus generic update and delete |
@@ -208,6 +208,9 @@ OSLC does not advertise — which stream is current, what the folder structure i
 what a SysML v2 model contains — while this server creates and updates artifacts in ETM and EWM,
 where AI Hub has no create tool at all, and reaches governed domains outside ELM entirely. Tool names
 are namespaced per server on both sides, so the surfaces do not collide.
+
+The AI Hub column counts a **specific release**. A later one may add creates, updates or deletes and
+invalidate the middle rows — check IBM's *MCP tools for Engineering AI Hub* before relying on them.
 
 [Full comparison](docs/comparison-ibm-engineering-ai-hub.md), including what neither inventory tells
 you: what its search filters actually do.
