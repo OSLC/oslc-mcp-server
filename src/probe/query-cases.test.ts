@@ -5,6 +5,7 @@ import {
   casePaging,
   caseWhereIdentity,
   caseNegationPair,
+  caseWhereConstructs,
   type CaseContext,
 } from './query-cases.js';
 import type { GroundTruth } from './ground-truth.js';
@@ -159,5 +160,48 @@ describe('casePaging', () => {
     const result = await casePaging(ctx(scriptedHttp([membersBody(all)]), truthOf(5)));
     expect(result.verdict).toBe('ignored');
     expect(result.reason).toMatch(/whole baseline/);
+  });
+});
+
+describe('caseWhereConstructs — each construct judged against its own correct answer', () => {
+  // The order the cases are sent in, so a scripted reply lands on the right one.
+  const order = WHERE_CONSTRUCTS.map((c) => c.name);
+  const only = async (construct: string, body: string) => {
+    const bodies = order.map((n) => (n === construct ? body : membersBody([R(1)])));
+    const results = await caseWhereConstructs(ctx(scriptedHttp(bodies), truthOf(5)));
+    return results.find((r) => r.name === `where:${construct}`)!;
+  };
+
+  it('declares an expectation for every construct', () => {
+    expect(WHERE_CONSTRUCTS.every((c) => c.expectation)).toBe(true);
+  });
+
+  it('accepts an inequality that returns the complement', async () => {
+    // Was reported unsupported: judged like equality, which demands exactly R(1).
+    const r = await only('inequality', membersBody([R(2), R(3), R(4), R(5)]));
+    expect(r.verdict).toBe('supported');
+  });
+
+  it('accepts a comparison that returns a range excluding the boundary', async () => {
+    const r = await only('comparison', membersBody([R(3), R(4)]));
+    expect(r.verdict).toBe('supported');
+  });
+
+  it('leaves an accepted scoped term unsettled rather than unsupported', async () => {
+    // Nothing known can match `dcterms:creator{foaf:name="PROBE-01"}`, so an empty
+    // result is what a conformant server returns.
+    const r = await only('scoped-terms', membersBody([]));
+    expect(r.verdict).toBe('inconclusive');
+    expect(r.expected).toBeDefined();
+  });
+
+  it('still calls an unfiltered equality ignored', async () => {
+    const all = membersBody([R(1), R(2), R(3), R(4), R(5)]);
+    expect((await only('equality', all)).verdict).toBe('ignored');
+  });
+
+  it('still calls an inequality that returns the whole baseline ignored', async () => {
+    const all = membersBody([R(1), R(2), R(3), R(4), R(5)]);
+    expect((await only('inequality', all)).verdict).toBe('ignored');
   });
 });

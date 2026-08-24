@@ -7,9 +7,11 @@ import {
   type GroundTruth,
 } from './ground-truth.js';
 import {
+  judgeComplement,
   judgeFilter,
   judgeOrdering,
   judgePartition,
+  judgeRange,
   memberURIs,
   type CaseResult,
 } from './verdicts.js';
@@ -26,23 +28,43 @@ export interface CaseContext {
   usePost: boolean;
 }
 
+/**
+ * What a correct answer to a construct looks like, which is not the same for all
+ * of them:
+ *
+ * - `identity` — exactly the one known resource. True of `=`, `in [v]`, `and`,
+ *   `or` and `v*` **as templated here**, because each of those clauses names a
+ *   single value that one resource carries.
+ * - `complement` — the baseline without that resource: `!=`.
+ * - `range` — zero or many, boundary excluded: `>`.
+ * - `unjudgeable` — the clause is well-formed but nothing known can match it, so
+ *   only an outright refusal is informative: the scoped term asks for a creator
+ *   *named* like an identifier value.
+ *
+ * Judging all of them as `identity` marked a conformant server `unsupported` for
+ * the last three: `!=` correctly returns everything else, `>` correctly returns a
+ * range, and the scoped term correctly returns nothing.
+ */
+export type ConstructExpectation = 'identity' | 'complement' | 'range' | 'unjudgeable';
+
 export const WHERE_CONSTRUCTS: Array<{
   name: string;
   template: (p: string, v: string) => string;
   inSyntax: boolean;
+  expectation: ConstructExpectation;
 }> = [
-  { name: 'equality',       template: (p, v) => `${p}="${v}"`,                        inSyntax: true },
-  { name: 'inequality',     template: (p, v) => `${p}!="${v}"`,                       inSyntax: true },
-  { name: 'comparison',     template: (p, v) => `${p}>"${v}"`,                        inSyntax: true },
-  { name: 'set-membership', template: (p, v) => `${p} in ["${v}"]`,                   inSyntax: true },
-  { name: 'conjunction',    template: (p, v) => `${p}="${v}" and ${p}="${v}"`,        inSyntax: true },
-  { name: 'scoped-terms',   template: (_p, v) => `dcterms:creator{foaf:name="${v}"}`, inSyntax: true },
+  { name: 'equality',       template: (p, v) => `${p}="${v}"`,                        inSyntax: true,  expectation: 'identity' },
+  { name: 'inequality',     template: (p, v) => `${p}!="${v}"`,                       inSyntax: true,  expectation: 'complement' },
+  { name: 'comparison',     template: (p, v) => `${p}>"${v}"`,                        inSyntax: true,  expectation: 'range' },
+  { name: 'set-membership', template: (p, v) => `${p} in ["${v}"]`,                   inSyntax: true,  expectation: 'identity' },
+  { name: 'conjunction',    template: (p, v) => `${p}="${v}" and ${p}="${v}"`,        inSyntax: true,  expectation: 'identity' },
+  { name: 'scoped-terms',   template: (_p, v) => `dcterms:creator{foaf:name="${v}"}`, inSyntax: true,  expectation: 'unjudgeable' },
   // Not in the OSLC query syntax. A server rejecting these is entirely
   // correct and must never be triaged as a defect. They are probed because a
   // server that *does* support them offers capability worth knowing about —
   // and worth deciding, deliberately, whether to depend on.
-  { name: 'disjunction',    template: (p, v) => `${p}="${v}" or ${p}="${v}"`,         inSyntax: false },
-  { name: 'wildcard',       template: (p, v) => `${p}="${v}*"`,                       inSyntax: false },
+  { name: 'disjunction',    template: (p, v) => `${p}="${v}" or ${p}="${v}"`,         inSyntax: false, expectation: 'identity' },
+  { name: 'wildcard',       template: (p, v) => `${p}="${v}*"`,                       inSyntax: false, expectation: 'identity' },
 ];
 
 /** Send by whichever method the context selected, recording the exchange. */
@@ -436,12 +458,34 @@ export async function caseWhereConstructs(ctx: CaseContext): Promise<CaseResult[
       });
       continue;
     }
-    const judged = judgeFilter({
-      returned: memberURIs(response.body, ctx.queryBase),
-      expectedURI: known.uri,
-      baseline: ctx.truth.baseline,
-    });
-    results.push({ name, ...judged, transcripts });
+    // An accepted clause is judged against what a correct answer to THAT clause
+    // is, not against the identity expectation the equality case uses.
+    const returned = memberURIs(response.body, ctx.queryBase);
+    const baseline = ctx.truth.baseline;
+    switch (construct.expectation) {
+      case 'complement':
+        results.push({ name, ...judgeComplement({ returned, excludedURI: known.uri, baseline }), transcripts });
+        break;
+      case 'range':
+        results.push({ name, ...judgeRange({ returned, boundaryURI: known.uri, baseline }), transcripts });
+        break;
+      case 'unjudgeable':
+        // Accepted, and nothing known can match it: no creator is named like an
+        // identifier value. The refusal above is the only sound signal for this
+        // clause, so acceptance is reported as unsettled rather than as either
+        // verdict — reporting it as unsupported marked conformant servers wrong.
+        results.push({
+          name,
+          verdict: 'inconclusive',
+          reason: 'the clause was accepted; its effect cannot be judged, because no value is known ' +
+            'that a correct server would match on the nested term',
+          expected: 'a scoped term on a nested value known to identify one resource returns exactly it',
+          transcripts,
+        });
+        break;
+      default:
+        results.push({ name, ...judgeFilter({ returned, expectedURI: known.uri, baseline }), transcripts });
+    }
   }
   return results;
 }

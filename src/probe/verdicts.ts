@@ -85,6 +85,98 @@ export function judgeFilter(args: {
 }
 
 /**
+ * A clause whose correct answer is the baseline MINUS one resource — `a!="v"`.
+ *
+ * Judged by exclusion rather than by an exact expected set, because the baseline
+ * is page one of the unparameterised query: a server that pages returns a subset
+ * of the complement, and demanding the exact complement would report a working
+ * `!=` as broken. What a working `!=` must do is leave the named resource out
+ * while returning others; what a dropped clause does is return it anyway.
+ */
+export function judgeComplement(args: {
+  returned: string[];
+  excludedURI: string;
+  baseline: string[];
+}): { verdict: Verdict; reason: string } {
+  const { returned, excludedURI, baseline } = args;
+
+  if (baseline.length < 2) {
+    return {
+      verdict: 'inconclusive',
+      reason: `the baseline holds ${baseline.length} resource(s), so a complement cannot be told from no filter`,
+    };
+  }
+  if (returned.includes(excludedURI)) {
+    return sameSet(returned, baseline)
+      ? { verdict: 'ignored', reason: 'the whole baseline came back, so the clause was not applied' }
+      : {
+          verdict: 'unsupported',
+          reason: `${excludedURI} was returned, though the clause excludes it`,
+        };
+  }
+  if (returned.length === 0) {
+    return {
+      verdict: 'unsupported',
+      reason: `nothing was returned, though the baseline holds ${baseline.length - 1} other resource(s)`,
+    };
+  }
+  const expected = baseline.filter((uri) => uri !== excludedURI);
+  return sameSet(returned, expected)
+    ? { verdict: 'supported', reason: 'exactly the baseline without the excluded resource' }
+    : {
+        verdict: 'supported',
+        reason: `the excluded resource was left out and ${returned.length} of ${expected.length} other(s) ` +
+          'came back — consistent with the clause applied and the result paged',
+      };
+}
+
+/**
+ * A clause whose correct answer is a RANGE — `a>"v"`. Zero or many, and which
+ * resources depends on a collation the server chooses and does not publish, so
+ * there is no expected set to compare against.
+ *
+ * Two invariants hold whatever the collation: a strict `>` never returns the
+ * boundary value itself, and a clause that was applied does not return the whole
+ * baseline. An empty result satisfies both and proves nothing — it is what a
+ * boundary at the maximum and a silently dropped clause both look like.
+ */
+export function judgeRange(args: {
+  returned: string[];
+  boundaryURI: string;
+  baseline: string[];
+}): { verdict: Verdict; reason: string; expected?: string } {
+  const { returned, boundaryURI, baseline } = args;
+
+  if (baseline.length < 2) {
+    return {
+      verdict: 'inconclusive',
+      reason: `the baseline holds ${baseline.length} resource(s), so a range cannot be told from no filter`,
+    };
+  }
+  if (sameSet(returned, baseline)) {
+    return { verdict: 'ignored', reason: 'the whole baseline came back, so the clause was not applied' };
+  }
+  if (returned.includes(boundaryURI)) {
+    return {
+      verdict: 'unsupported',
+      reason: `${boundaryURI} was returned, though a strict comparison excludes the boundary value`,
+    };
+  }
+  if (returned.length === 0) {
+    return {
+      verdict: 'inconclusive',
+      reason: 'nothing was returned, which is what both a boundary at the greatest value and a ' +
+        'dropped clause look like',
+      expected: 'a subset of the baseline, excluding the boundary resource',
+    };
+  }
+  return {
+    verdict: 'supported',
+    reason: `${returned.length} of ${baseline.length} returned, with the boundary resource excluded`,
+  };
+}
+
+/**
  * The negation pair (§8.3). `a="v"` and `a!="v"` should partition the
  * baseline: together they account for it exactly, and neither alone equals
  * it. Needs nothing known in advance, so it works in every mode.

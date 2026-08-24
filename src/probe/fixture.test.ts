@@ -1,10 +1,13 @@
 import { describe, it, expect } from '@jest/globals';
+import { graph, parse } from 'rdflib';
+import { parseShape } from 'oslc-service/mcp';
 import {
   FIXTURE_PREFIX,
   fixtureSpecs,
-  fixtureTurtle,
+  fixtureRdfXml,
   createManifest,
   chooseFixtureType,
+  requiredExtras,
 } from './fixture.js';
 
 describe('fixtureSpecs', () => {
@@ -35,24 +38,62 @@ describe('fixtureSpecs', () => {
   });
 });
 
-describe('fixtureTurtle', () => {
+describe('the PROBE- marker', () => {
+  it('is in the title, since dcterms:identifier is not sent', () => {
+    // A human hunting leftover fixtures in the server's own UI has only the title
+    // to go on: the identifier is whatever the server assigned.
+    for (const spec of fixtureSpecs()) {
+      expect(spec.title.startsWith(FIXTURE_PREFIX)).toBe(true);
+    }
+  });
+
+  it('keeps titles unique and sortable, for filters and ordering', () => {
+    const titles = fixtureSpecs().map((s) => s.title);
+    expect(new Set(titles).size).toBe(titles.length);
+    expect([...titles].sort()).toEqual(titles);
+  });
+});
+
+describe('fixtureRdfXml', () => {
   const TYPE = 'http://open-services.net/ns/rm#Requirement';
 
-  it('types the resource and carries its identifier and title', () => {
-    const turtle = fixtureTurtle({ identifier: 'PROBE-01', title: 'Probe 01' }, TYPE);
-    expect(turtle).toContain(`a <${TYPE}>`);
-    expect(turtle).toContain('"PROBE-01"');
-    expect(turtle).toContain('"Probe 01"');
+  it('types the resource and carries its title', () => {
+    const body = fixtureRdfXml({ identifier: 'PROBE-01', title: 'PROBE-01' }, TYPE);
+    // RDF/XML, not Turtle: OSLC Core requires it and makes Turtle optional, so a
+    // fixture established over Turtle can fail against a conformant server.
+    expect(body).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+    expect(body).toContain('xmlns:t="http://open-services.net/ns/rm#"');
+    expect(body).toContain('<t:Requirement rdf:about="">');
+    expect(body).toContain('<dcterms:title>PROBE-01</dcterms:title>');
+  });
+
+  it('does not send dcterms:identifier, which Core makes server-assigned', () => {
+    // Sending it asked a conformant server to ignore it, and its absence from the
+    // read-back then registered as a "property dropped on create" finding.
+    expect(fixtureRdfXml({ identifier: 'PROBE-01', title: 'PROBE-01' }, TYPE))
+      .not.toContain('dcterms:identifier');
+  });
+
+  it('leaves the URI to the server, as rdf:about=""', () => {
+    expect(fixtureRdfXml({ identifier: 'PROBE-01', title: 'Probe 01' }, TYPE))
+      .toContain('rdf:about=""');
   });
 
   it('omits the optional property when the spec has none', () => {
-    const turtle = fixtureTurtle({ identifier: 'PROBE-02', title: 'Probe 02' }, TYPE);
-    expect(turtle).not.toContain('description');
+    expect(fixtureRdfXml({ identifier: 'PROBE-02', title: 'Probe 02' }, TYPE))
+      .not.toContain('description');
   });
 
-  it('escapes quotes so a value cannot break out of its literal', () => {
-    const turtle = fixtureTurtle({ identifier: 'PROBE-03', title: 'He said "hi"' }, TYPE);
-    expect(turtle).toContain('\\"hi\\"');
+  it('escapes markup so a value cannot break out of its element', () => {
+    const body = fixtureRdfXml({ identifier: 'PROBE-03', title: 'a < b & c' }, TYPE);
+    expect(body).toContain('a &lt; b &amp; c');
+    expect(body).not.toContain('a < b & c');
+  });
+
+  it('handles a type URI whose namespace ends in a slash', () => {
+    const body = fixtureRdfXml({ identifier: 'PROBE-04', title: 'Probe 04' }, 'http://example.org/vocab/Widget');
+    expect(body).toContain('xmlns:t="http://example.org/vocab/"');
+    expect(body).toContain('<t:Widget rdf:about="">');
   });
 });
 
@@ -97,5 +138,127 @@ describe('chooseFixtureType', () => {
 
   it('returns null when nothing is creatable', () => {
     expect(chooseFixtureType({ factories: [] } as any)).toBeNull();
+  });
+});
+
+describe('required properties are read from the shape', () => {
+  const factory = (title: string, properties: any[]) => ({
+    title, creationURI: `https://elm.example.com/f/${title}`,
+    resourceType: 'http://open-services.net/ns/cm#ChangeRequest',
+    shape: { description: '', properties },
+  }) as any;
+  const TITLE = { name: 'title', propertyDefinition: 'http://purl.org/dc/terms/title', occurs: 'exactly-one' };
+  const FILED = {
+    name: 'filedAgainst',
+    propertyDefinition: 'http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/filedAgainst',
+    occurs: 'exactly-one',
+    valueType: 'http://open-services.net/ns/core#Resource',
+    allowedValues: ['https://elm.example.com/cat/JKE', 'https://elm.example.com/cat/Unassigned'],
+  };
+
+  it('counts a lowercase `occurs`, which is how discovery reports it', () => {
+    // The bug: requiredCount compared against 'http://…core#Exactly-one' while the
+    // discovered shape carries 'exactly-one', so every factory looked unconstrained
+    // and the fixture omitted properties the server insists on.
+    const chosen = chooseFixtureType({
+      title: 'sp', uri: 'https://elm.example.com/sp',
+      factories: [factory('Defect', [TITLE, FILED]), factory('Task', [TITLE])],
+      queries: [], domains: [],
+    } as any);
+    expect(chosen?.title).toBe('Task');
+  });
+
+  it('supplies a required reference from its first allowed value', () => {
+    const extras = requiredExtras({ properties: [TITLE, FILED] }, 'PROBE-01');
+    expect(extras).toEqual([{
+      predicate: 'http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/filedAgainst',
+      value: 'https://elm.example.com/cat/JKE',
+      isReference: true,
+    }]);
+  });
+
+  it('does not repeat a property the fixture already sends', () => {
+    expect(requiredExtras({ properties: [TITLE] }, 'PROBE-01')).toEqual([]);
+  });
+
+  it('will not invent a URI for a required reference with no allowed values', () => {
+    // Any URI would be a fabricated link. Better to let the create fail with the
+    // server's own message, which names what is missing.
+    const extras = requiredExtras({ properties: [{ ...FILED, allowedValues: [] }] }, 'PROBE-01');
+    expect(extras).toEqual([]);
+  });
+
+  it('gives a required literal the PROBE- marker, so residue stays identifiable', () => {
+    const extras = requiredExtras({ properties: [
+      { name: 'summary', propertyDefinition: 'http://example.org/summary', occurs: 'exactly-one' },
+    ] }, 'PROBE-01');
+    expect(extras).toEqual([{ predicate: 'http://example.org/summary', value: 'PROBE-01', isReference: false }]);
+  });
+
+  it('writes a reference as rdf:resource and a literal as element text', () => {
+    const body = fixtureRdfXml({ identifier: 'PROBE-01', title: 'PROBE-01' },
+      'http://open-services.net/ns/cm#ChangeRequest', [
+        { predicate: 'http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/filedAgainst', value: 'https://elm.example.com/cat/JKE', isReference: true },
+        { predicate: 'http://example.org/summary', value: 'PROBE-01', isReference: false },
+      ]);
+    expect(body).toContain('filedAgainst xmlns:e0="http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/" rdf:resource="https://elm.example.com/cat/JKE"');
+    expect(body).toContain('<e1:summary xmlns:e1="http://example.org/">PROBE-01</e1:summary>');
+  });
+});
+
+describe('required properties via the graph, not the flattened array', () => {
+  const SHAPE_URI = 'http://example.org/shapes/Defect';
+  const FILED = 'http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/filedAgainst';
+  const DEFAULT_CAT = 'https://elm.example.com/cat/Unassigned';
+
+  /** A shape as it comes off the wire, parsed the way discovery parses it. */
+  const parsed = () => {
+    const rdf = `<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:oslc="http://open-services.net/ns/core#"
+         xmlns:dcterms="http://purl.org/dc/terms/">
+  <oslc:ResourceShape rdf:about="${SHAPE_URI}">
+    <oslc:property>
+      <oslc:Property>
+        <oslc:name>filedAgainst</oslc:name>
+        <oslc:propertyDefinition rdf:resource="${FILED}"/>
+        <oslc:occurs rdf:resource="http://open-services.net/ns/core#Exactly-one"/>
+        <oslc:valueType rdf:resource="http://open-services.net/ns/core#Resource"/>
+        <oslc:defaultValue rdf:resource="${DEFAULT_CAT}"/>
+        <oslc:allowedValue rdf:resource="${DEFAULT_CAT}"/>
+        <oslc:allowedValue rdf:resource="https://elm.example.com/cat/JKE"/>
+      </oslc:Property>
+    </oslc:property>
+  </oslc:ResourceShape>
+</rdf:RDF>`;
+    const store = graph();
+    parse(rdf, store, SHAPE_URI, 'application/rdf+xml');
+    return parseShape(store, SHAPE_URI);
+  };
+
+  it('reads Exactly-one from the OSLC URI the server published', () => {
+    expect(requiredExtras(parsed(), 'PROBE-01')).toHaveLength(1);
+  });
+
+  it('avoids the shape’s advertised default when another value exists', () => {
+    // EWM advertises `Unassigned` as filedAgainst's default and rejects it on
+    // save. A required property whose default the server would accept need not
+    // have been required at all.
+    expect(requiredExtras(parsed(), 'PROBE-01')[0]).toEqual({
+      predicate: FILED,
+      value: 'https://elm.example.com/cat/JKE',
+      isReference: true,
+    });
+  });
+
+  it('falls back to the default when it is the only allowed value', () => {
+    const shape = parsed();
+    shape.access = undefined;   // a hand-built shape: no store behind it
+    (shape.properties as any) = [{
+      predicateURI: FILED, occurs: 'exactly-one',
+      valueType: 'http://open-services.net/ns/core#Resource',
+      allowedValues: [DEFAULT_CAT], defaultValue: DEFAULT_CAT,
+    }];
+    expect(requiredExtras(shape, 'PROBE-01')[0].value).toBe(DEFAULT_CAT);
   });
 });

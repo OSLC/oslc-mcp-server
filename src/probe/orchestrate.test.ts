@@ -249,3 +249,37 @@ describe('runProbe', () => {
     expect(lines.length).toBeGreaterThan(0);
   });
 });
+
+describe('a refusal carries the server’s own explanation', () => {
+  const ERROR_BODY =
+    '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" ' +
+    'xmlns:oslc="http://open-services.net/ns/core#"><rdf:Description>' +
+    "<oslc:message>'Save Work Item' failed. Preconditions have not been met: " +
+    "The 'Filed Against' attribute needs to be set</oslc:message>" +
+    '<oslc:statusCode>403</oslc:statusCode></rdf:Description></rdf:RDF>';
+
+  it('puts it in modeReason, so a 403 is not read as an authorization problem', async () => {
+    // The bug this covers: the probe reported "refused a create with 403" and
+    // discarded the sentence that says the create was missing a required
+    // attribute. Readers then went looking at roles and permissions.
+    const http = {
+      request: jest.fn(async (config: any) =>
+        config.method === 'POST'
+          ? { status: 403, headers: {}, data: ERROR_BODY }
+          : { status: 200, headers: { 'content-type': 'application/rdf+xml' }, data: membersBody([]) }
+      ),
+    } as any;
+
+    const run = await runProbe({
+      http,
+      sp: sp(),
+      queryBase: QUERY_BASE,
+      onDeleteUnsupported: 'stop',
+      manifestWrite: () => {},
+    });
+
+    expect(run.mode).toBe('read-only');
+    expect(run.modeReason).toContain('403');
+    expect(run.modeReason).toContain("'Filed Against' attribute needs to be set");
+  });
+});

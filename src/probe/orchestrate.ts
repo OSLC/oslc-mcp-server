@@ -4,7 +4,8 @@ import {
   chooseFixtureType,
   createManifest,
   fixtureSpecs,
-  fixtureTurtle,
+  fixtureRdfXml,
+  requiredExtras,
   type FixtureSpec,
 } from './fixture.js';
 import { sampleGroundTruth, type GroundTruth, type KnownResource } from './ground-truth.js';
@@ -63,18 +64,26 @@ async function create(
   http: ProbeHttp,
   creationURI: string,
   body: string
-): Promise<{ ok: boolean; uri: string | null; status: number }> {
+): Promise<{ ok: boolean; uri: string | null; status: number; message: string | null }> {
   const response = await http.request({
     method: 'POST',
     url: creationURI,
-    headers: { 'Content-Type': 'text/turtle', 'OSLC-Core-Version': '2.0', 'Accept': 'application/rdf+xml' },
+    // RDF/XML both ways: it is the representation OSLC Core requires every
+    // server to support, so a refusal is a finding rather than an artefact of
+    // having asked in an optional format.
+    headers: { 'Content-Type': 'application/rdf+xml', 'OSLC-Core-Version': '2.0', 'Accept': 'application/rdf+xml' },
     data: body,
     validateStatus: () => true,
     responseType: 'text',
     transformResponse: [(b: unknown) => b],
   });
   const location = response.headers?.location ?? response.headers?.Location ?? null;
-  return { ok: response.status < 400, uri: location, status: response.status };
+  return {
+    ok: response.status < 400,
+    uri: location,
+    status: response.status,
+    message: oslcMessage(response.data),
+  };
 }
 
 async function remove(http: ProbeHttp, uri: string): Promise<boolean> {
@@ -93,6 +102,27 @@ async function remove(http: ProbeHttp, uri: string): Promise<boolean> {
 function literalValues(body: string, predicateLocalName: string): string[] {
   const pattern = new RegExp(`<[^>]*:${predicateLocalName}[^>]*>([^<]*)<`, 'g');
   return [...body.matchAll(pattern)].map((m) => m[1].trim()).filter(Boolean);
+}
+
+/**
+ * The `oslc:Error` message a server sent with a refusal.
+ *
+ * Reported rather than discarded, because the status alone sends the reader to
+ * the wrong place: EWM answers a **403** when a work item fails a save
+ * precondition ("The 'Filed Against' attribute needs to be set"), which reads as
+ * an authorization problem and is not one. The server almost always says exactly
+ * what is wrong; a probe that drops it makes the caller rediscover it by hand.
+ */
+function oslcMessage(body: unknown): string | null {
+  if (typeof body !== 'string' || body.length === 0) return null;
+  const match = /<oslc:message[^>]*>([\s\S]*?)<\/oslc:message>/.exec(body);
+  if (!match) return null;
+  const text = match[1]
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return null;
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
 }
 
 /**
@@ -117,7 +147,10 @@ async function readBackGroundTruth(
     // Phase 3 compares in ONE direction: a property sent that did not come
     // back is a finding; a property returned that was never sent is a server
     // annotation (oslc:serviceProvider, dcterms:created, …) and conformant.
-    if (!identifiers.includes(spec.identifier)) dropped.push({ uri, property: DCTERMS_IDENTIFIER });
+    // Only properties the fixture actually SENT can be reported as dropped.
+    // dcterms:identifier is not sent (Core makes it server-assigned), so its
+    // absence is not a finding — reporting it was five false findings per run
+    // against any server that assigns its own ids.
     if (!titles.includes(spec.title)) dropped.push({ uri, property: DCTERMS_TITLE });
 
     resources.push({
@@ -188,9 +221,14 @@ export async function runProbe(args: {
   const specs = fixtureSpecs();
   const probeSpec = specs[0];
   manifest.record('probe-artifact (pending)');
-  const probe = await create(http, factory.creationURI, fixtureTurtle(probeSpec, factory.resourceType));
+  const probe = await create(http, factory.creationURI,
+    fixtureRdfXml(probeSpec, factory.resourceType, requiredExtras(factory.shape, probeSpec.title)));
   if (!probe.ok) {
-    return readOnly(`the creation factory refused a create with ${probe.status}`, null);
+    return readOnly(
+      `the creation factory refused a create with ${probe.status}` +
+      (probe.message ? ` — ${probe.message}` : ''),
+      null
+    );
   }
   serviceProvidersWritten.push(sp.uri);
 
@@ -227,7 +265,8 @@ export async function runProbe(args: {
   const created: Array<{ uri: string; spec: FixtureSpec }> = [];
   for (const spec of specs) {
     manifest.record(`${spec.identifier} (pending)`);
-    const made = await create(http, factory.creationURI, fixtureTurtle(spec, factory.resourceType));
+    const made = await create(http, factory.creationURI,
+      fixtureRdfXml(spec, factory.resourceType, requiredExtras(factory.shape, spec.title)));
     if (made.ok && made.uri) {
       manifest.record(made.uri);
       created.push({ uri: made.uri, spec });

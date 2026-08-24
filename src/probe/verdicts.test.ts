@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { judgeFilter, judgePartition, judgeOrdering, memberURIs } from './verdicts.js';
+import { judgeFilter, judgePartition, judgeOrdering, memberURIs, judgeComplement, judgeRange } from './verdicts.js';
 
 const BASE = ['r/1', 'r/2', 'r/3', 'r/4', 'r/5'];
 
@@ -86,5 +86,74 @@ describe('memberURIs', () => {
 
   it('returns an empty list for an unparseable body rather than throwing', () => {
     expect(memberURIs('not rdf at all', 'https://elm.example.com/rm/views')).toEqual([]);
+  });
+});
+
+describe('judgeComplement — a clause whose answer is everything but one', () => {
+  const baseline = ['a', 'b', 'c'];
+
+  it('accepts the exact complement', () => {
+    expect(judgeComplement({ returned: ['b', 'c'], excludedURI: 'a', baseline }).verdict)
+      .toBe('supported');
+  });
+
+  it('accepts a paged complement, since the baseline is only page one', () => {
+    // Demanding the exact complement reported a working `!=` as broken on any
+    // server that pages.
+    const judged = judgeComplement({ returned: ['b'], excludedURI: 'a', baseline });
+    expect(judged.verdict).toBe('supported');
+    expect(judged.reason).toContain('paged');
+  });
+
+  it('calls the whole baseline ignored, not unsupported', () => {
+    expect(judgeComplement({ returned: ['a', 'b', 'c'], excludedURI: 'a', baseline }).verdict)
+      .toBe('ignored');
+  });
+
+  it('rejects a result that includes the excluded resource', () => {
+    expect(judgeComplement({ returned: ['a', 'b'], excludedURI: 'a', baseline }).verdict)
+      .toBe('unsupported');
+  });
+
+  it('rejects an empty result when others were expected', () => {
+    expect(judgeComplement({ returned: [], excludedURI: 'a', baseline }).verdict)
+      .toBe('unsupported');
+  });
+});
+
+describe('judgeRange — a clause whose answer is a range', () => {
+  const baseline = ['a', 'b', 'c'];
+
+  it('accepts a narrowed set that excludes the boundary', () => {
+    expect(judgeRange({ returned: ['b'], boundaryURI: 'a', baseline }).verdict).toBe('supported');
+  });
+
+  it('calls the whole baseline ignored', () => {
+    expect(judgeRange({ returned: ['a', 'b', 'c'], boundaryURI: 'a', baseline }).verdict)
+      .toBe('ignored');
+  });
+
+  it('rejects a result containing the boundary, which a strict > excludes', () => {
+    expect(judgeRange({ returned: ['a', 'b'], boundaryURI: 'a', baseline }).verdict)
+      .toBe('unsupported');
+  });
+
+  it('will not read an empty result either way, and says what it wanted', () => {
+    // A boundary at the greatest value and a dropped clause look identical.
+    const judged = judgeRange({ returned: [], boundaryURI: 'a', baseline });
+    expect(judged.verdict).toBe('inconclusive');
+    expect(judged.expected).toBeDefined();
+  });
+});
+
+describe('the identity expectation is not applied to every construct', () => {
+  it('would have called a correct != unsupported', () => {
+    // The bug this fixes, stated as the test: a conformant `!=` returns the
+    // complement, and judgeFilter demands exactly the one named resource.
+    const baseline = ['a', 'b', 'c'];
+    expect(judgeFilter({ returned: ['b', 'c'], expectedURI: 'a', baseline }).verdict)
+      .toBe('unsupported');
+    expect(judgeComplement({ returned: ['b', 'c'], excludedURI: 'a', baseline }).verdict)
+      .toBe('supported');
   });
 });
