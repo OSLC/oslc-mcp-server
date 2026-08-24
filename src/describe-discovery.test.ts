@@ -230,3 +230,59 @@ describe('generated tool names', () => {
   });
 });
 
+
+describe('query features in the report', () => {
+  const QUERY_BASE = `${SP}/views`;
+  const run = (cases: any[], extra: Partial<any> = {}): any => ({
+    mode: 'fixture', modeReason: '', serviceProvidersWritten: [], needingCleanup: [],
+    deleteSupported: true, fixtureVisibleToQuery: true, cases, ...extra,
+  });
+  const report = (probes?: Map<string, any>) =>
+    describeDiscovery({ ...base, discovery: discoveryWith(), probes });
+
+  it('says features were not probed, and how to probe them', () => {
+    // Never silent about what it did not look at: an absent section reads as
+    // "this server supports no query features", which is a different claim.
+    expect(report()).toContain('query features: not probed (start with `--probe-oslc` to measure them)');
+  });
+
+  it('says not probed for a query base no run covered', () => {
+    expect(report(new Map())).toContain('query features: not probed');
+  });
+
+  it('renders a verdict for every case, collapsing the name families', () => {
+    const text = report(new Map([[QUERY_BASE, run([
+      { name: 'where:equality', verdict: 'supported', reason: 'r' },
+      { name: 'where:wildcard', verdict: 'ignored', reason: 'every resource came back' },
+      { name: 'prefix-discovery:oslc.where', verdict: 'supported', reason: 'r' },
+      { name: 'select', verdict: 'supported', reason: 'r' },
+      { name: 'paging', verdict: 'ignored', reason: 'the server chose its own page size' },
+    ])]]));
+    expect(text).toContain('where: equality yes, wildcard ignored');
+    // and the reason, or the line cannot be acted on: a refusal and a wrong-result
+    // verdict both print as "NO"/"ignored" without it
+    expect(text).toContain('wildcard: every resource came back');
+    expect(text).toContain('prefix-discovery: oslc.where yes');
+    expect(text).toContain('select: yes');
+    // A non-support verdict carries its reason: "ignored" alone does not say
+    // whether the filter was dropped or the page size was the server's choice.
+    expect(text).toContain('paging: ignored — the server chose its own page size');
+  });
+
+  it('renders a case added later without being told about it', () => {
+    // The point of rendering the whole run: a new probe case must not be measured
+    // and then silently dropped from the report.
+    expect(report(new Map([[QUERY_BASE, run([
+      { name: 'some-future-case', verdict: 'unsupported', reason: 'answered 501' },
+    ])]]))).toContain('some-future-case: NO — answered 501');
+  });
+
+  it('warns when the fixture never became visible, and names what was left behind', () => {
+    const text = report(new Map([[QUERY_BASE, run(
+      [{ name: 'select', verdict: 'supported', reason: 'r' }],
+      { fixtureVisibleToQuery: false, deleteSupported: false, needingCleanup: ['http://elm/qm/res/1'] }
+    )]]));
+    expect(text).toContain('never became visible to query');
+    expect(text).toContain('LEFT BEHIND, needs manual cleanup: http://elm/qm/res/1');
+  });
+});

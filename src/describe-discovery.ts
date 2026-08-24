@@ -1,5 +1,7 @@
 import type { DiscoveryResult, DiscoveredServiceProvider, DiscoveredFactory } from 'oslc-service/mcp';
 import type { CatalogResolution } from './catalog-resolution.js';
+import type { ProbeRun } from './probe/orchestrate.js';
+import type { CaseResult, Verdict } from './probe/verdicts.js';
 import { createToolName } from 'oslc-service/mcp';
 
 /**
@@ -7,6 +9,16 @@ import { createToolName } from 'oslc-service/mcp';
  */
 export interface DescribeDiscoveryInput {
   alias: string;
+
+  /**
+   * What probing measured, keyed by the query base it measured. Absent unless
+   * the server was started with `--probe-oslc`: OSLC advertises no query-feature
+   * support, so nothing here can be discovered — a query capability names a
+   * queryBase and its resource types and says nothing about which of
+   * `oslc.where`, `oslc.select`, `oslc.orderBy`, paging or the optional where
+   * constructs the server actually implements. Only issuing queries answers it.
+   */
+  probes?: ReadonlyMap<string, ProbeRun>;
   /** '' for a single server; `${alias}_` when several are configured. */
   prefix: string;
   catalog: CatalogResolution;
@@ -34,7 +46,7 @@ function describeCatalogSource(catalog: CatalogResolution): string {
   }
 }
 
-function describeProvider(sp: DiscoveredServiceProvider, prefix: string): string[] {
+function describeProvider(sp: DiscoveredServiceProvider, prefix: string, probes?: ReadonlyMap<string, ProbeRun>): string[] {
   const lines = [`### ${sp.title}`, '', `- URI: ${sp.uri}`];
 
   lines.push('', '**Creation factories**', '');
@@ -61,6 +73,7 @@ function describeProvider(sp: DiscoveredServiceProvider, prefix: string): string
     for (const query of sp.queries) {
       lines.push(`- ${query.title} → ${query.queryBase}`);
       lines.push(`  - resource type: ${query.resourceType || '(none)'}`);
+      lines.push(...queryFeatureLines(query.queryBase, probes));
     }
   }
 
@@ -84,6 +97,68 @@ function describeProvider(sp: DiscoveredServiceProvider, prefix: string): string
  * Read-only and instant — no requests are made. That is why it is a separate
  * tool from the probe: it can be called freely, against anything.
  */
+/**
+ * What probing measured about one query base, as a compact matrix.
+ *
+ * Says "not probed" rather than nothing at all when there is no run for it. An
+ * absent section reads as "this server has no query features", and a report that
+ * is silent about what it did not look at is a report that misleads.
+ *
+ * Renders EVERY case in the run rather than a hand-listed set: a probe case added
+ * later would otherwise be measured and then silently dropped here, which is the
+ * same failure this section exists to fix. Cases whose names share a `family:`
+ * prefix (`where:equality`, `prefix-discovery:oslc.select`) collapse onto one
+ * line, so a 15-capability report stays readable.
+ */
+function queryFeatureLines(queryBase: string, probes?: ReadonlyMap<string, ProbeRun>): string[] {
+  if (!probes) {
+    return ['  - query features: not probed (start with `--probe-oslc` to measure them)'];
+  }
+  const run = probes.get(queryBase);
+  if (!run) {
+    return ['  - query features: not probed'];
+  }
+
+  const mark = (v: Verdict): string => (v === 'supported' ? 'yes' : v === 'unsupported' ? 'NO' : v);
+  const lines = [`  - query features (probed, ${run.mode}: ${run.modeReason || 'fixture established'})`];
+
+  const families = new Map<string, CaseResult[]>();
+  const singles: CaseResult[] = [];
+  for (const c of run.cases) {
+    const at = c.name.indexOf(':');
+    if (at < 0) { singles.push(c); continue; }
+    const family = c.name.slice(0, at);
+    (families.get(family) ?? families.set(family, []).get(family)!).push(c);
+  }
+
+  for (const [family, cases] of families) {
+    lines.push(`    ${family}: ` +
+      cases.map((c) => `${c.name.slice(family.length + 1)} ${mark(c.verdict)}`).join(', '));
+    // The reason for anything that is not plain support, one per line. Without it
+    // a family line cannot be acted on: "inequality NO" reads the same whether the
+    // server refused the clause with a 400 or answered it correctly and the probe
+    // expected the wrong result set.
+    for (const c of cases) {
+      if (c.verdict !== 'supported') {
+        lines.push(`      ${c.name.slice(family.length + 1)}: ${c.reason}`);
+      }
+    }
+  }
+  for (const c of singles) {
+    // The reason is what makes a non-support verdict actionable — "ignored" alone
+    // does not say whether the server chose its own page size or dropped the filter.
+    lines.push(`    ${c.name}: ${mark(c.verdict)}` +
+      (c.verdict === 'supported' ? '' : ` — ${c.reason}`));
+  }
+  if (run.fixtureVisibleToQuery === false) {
+    lines.push('    NOTE: the created fixture never became visible to query, so filter verdicts rest on sampled data');
+  }
+  if (run.needingCleanup.length > 0) {
+    lines.push(`    LEFT BEHIND, needs manual cleanup: ${run.needingCleanup.join(', ')}`);
+  }
+  return lines;
+}
+
 export function describeDiscovery(input: DescribeDiscoveryInput): string {
   const { alias, prefix, catalog, discovery } = input;
   const maxProviders = input.maxProviders ?? DEFAULT_MAX_PROVIDERS;
@@ -108,7 +183,7 @@ export function describeDiscovery(input: DescribeDiscoveryInput): string {
 
   const shown = discovery.serviceProviders.slice(0, maxProviders);
   for (const sp of shown) {
-    lines.push('', ...describeProvider(sp, prefix));
+    lines.push('', ...describeProvider(sp, prefix, input.probes));
   }
 
   const omitted = discovery.serviceProviders.length - shown.length;

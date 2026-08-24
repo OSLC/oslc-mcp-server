@@ -1,5 +1,8 @@
 import { describe, it, expect, jest } from '@jest/globals';
-import { parseConfigFile } from './config-file.js';
+import { parseConfigFile, loadConfigFile } from './config-file.js';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 
 const MINIMAL = `
 servers:
@@ -110,5 +113,48 @@ servers:
 
   it('rejects an empty server list', () => {
     expect(() => parseConfigFile('servers: []')).toThrow(/at least one server/i);
+  });
+});
+
+describe('loadConfigFile — where a relative reportPath points', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'oslc-cfg-'));
+  const configPath = join(dir, 'nested', 'oslc-mcp-server.yaml');
+  const write = (reportPath: string) => {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath,
+      `reportPath: ${reportPath}\nservers:\n  - alias: one\n    baseUrl: http://example.org\n`, 'utf8');
+  };
+
+  it('resolves against the configuration file, not the working directory', () => {
+    write('./oslc-discovery.md');
+    // The bug this covers: the path was handed to writeFileSync unresolved, so the
+    // report landed next to whatever directory node was invoked from, while a stale
+    // file beside the config kept being read as the current one.
+    expect(loadConfigFile(configPath).reportPath)
+      .toBe(join(dir, 'nested', 'oslc-discovery.md'));
+  });
+
+  it('resolves a path that climbs out of the configuration directory', () => {
+    write('../reports/discovery.md');
+    expect(loadConfigFile(configPath).reportPath).toBe(join(dir, 'reports', 'discovery.md'));
+  });
+
+  it('leaves an absolute path alone', () => {
+    write('/var/tmp/oslc-discovery.md');
+    expect(loadConfigFile(configPath).reportPath).toBe('/var/tmp/oslc-discovery.md');
+  });
+
+  it('reports the configuration directory as the base for other relative paths', () => {
+    write('./x.md');
+    expect(loadConfigFile(configPath).baseDir).toBe(join(dir, 'nested'));
+  });
+
+  it('leaves reportPath undefined when the configuration omits it', () => {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath,
+      'servers:\n  - alias: one\n    baseUrl: http://example.org\n', 'utf8');
+    const loaded = loadConfigFile(configPath);
+    expect(loaded.reportPath).toBeUndefined();
+    expect(loaded.baseDir).toBe(join(dir, 'nested'));   // still known, for the probe report
   });
 });

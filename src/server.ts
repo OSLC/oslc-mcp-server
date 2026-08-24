@@ -31,9 +31,10 @@ import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
 import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
 import { DEFAULT_REPORT_PATH } from './config-file.js';
-import { runProbe } from './probe/orchestrate.js';
+import { runProbe, type ProbeRun } from './probe/orchestrate.js';
 import { formatProbeReport } from './probe/report.js';
 import { writeFileSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import { checkTurtleSupport, formatTurtleCheck, type HttpGetter } from './representation.js';
 
 const { serialize: rdfSerialize } = rdflib;
@@ -367,27 +368,120 @@ interface ServerRuntime {
  * A failure to write is reported and otherwise ignored: the report is
  * diagnostic, and losing it is no reason to refuse to serve.
  */
-function writeDiscoveryReport(runtimes: ServerRuntime[], path: string): void {
+function writeDiscoveryReport(
+  runtimes: ServerRuntime[], path: string, baseDir?: string,
+  probes?: ReadonlyMap<string, ReadonlyMap<string, ProbeRun>>
+): void {
+  const target = resolveReportPath(path, baseDir);
   try {
     const document = describeDiscoveryDocument(runtimes.map((r) => ({
       alias: r.spec.alias,
       prefix: r.spec.prefix,
       catalog: r.spec.catalog,
       discovery: r.discovery,
+      probes: probes?.get(r.spec.alias),
     })));
-    writeFileSync(path, document, 'utf8');
+    writeFileSync(target, document, 'utf8');
+    // The ABSOLUTE path, always. A relative one cannot be checked by the reader:
+    // a report written elsewhere and a stale file beside the config print the
+    // same line, which is how a stale report gets read as fresh output.
     console.error(
-      `[report] wrote ${path} (${document.split('\n').length} lines, ` +
+      `[report] wrote ${target} (${lineCount(document)} lines, ` +
       `${runtimes.length} server${runtimes.length === 1 ? '' : 's'})`
     );
   } catch (err) {
-    console.error(`[report] could not write ${path}:`, err instanceof Error ? err.message : err);
+    console.error(`[report] could not write ${target}:`, err instanceof Error ? err.message : err);
   }
+}
+
+/**
+ * Probe every query capability of every discovered service provider, keyed
+ * `alias -> queryBase -> run`.
+ *
+ * Every capability, not one per provider: whether a server's query support is
+ * uniform across its capabilities is itself a finding, and assuming it would put
+ * a verdict in the report for a queryBase nobody measured. A deployment where the
+ * cost matters should not pass `--probe-oslc` at all.
+ *
+ * A probe that throws costs that one capability, not the startup: the server's
+ * job is to serve tools, and a measurement failure is not a reason to refuse.
+ */
+async function probeEveryQueryCapability(
+  runtimes: ServerRuntime[]
+): Promise<Map<string, Map<string, ProbeRun>>> {
+  const all = new Map<string, Map<string, ProbeRun>>();
+  const total = runtimes.reduce((n, r) => n + r.discovery.serviceProviders
+    .reduce((m, sp) => m + sp.queries.length, 0), 0);
+  let done = 0;
+  console.error(`[probe] --probe-oslc: measuring ${total} query capabilit${total === 1 ? 'y' : 'ies'}`);
+
+  for (const runtime of runtimes) {
+    const byQueryBase = new Map<string, ProbeRun>();
+    all.set(runtime.spec.alias, byQueryBase);
+    for (const sp of runtime.discovery.serviceProviders) {
+      for (const query of sp.queries) {
+        done++;
+        console.error(
+          `[probe] ${done}/${total} ${runtime.spec.alias}: ${query.title || query.queryBase}`
+        );
+        try {
+          byQueryBase.set(query.queryBase, await runProbe({
+            http: (runtime.spec.client as any).client,
+            sp,
+            queryBase: query.queryBase,
+            // Residue is worse than a weaker verdict here, because nobody asked
+            // this run a question — it happens on the way to serving tools. Left
+            // fixtures are named on stderr by the manifest either way.
+            onDeleteUnsupported: 'read-only',
+            manifestWrite: (line: string) => console.error(`[probe:manifest] ${line}`),
+          }));
+        } catch (err) {
+          console.error(
+            `[probe] ${runtime.spec.alias}: ${query.queryBase} could not be probed:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+    }
+  }
+  return all;
+}
+
+/** Lines as `wc -l` counts them: the trailing newline does not start a new one. */
+function lineCount(document: string): number {
+  const parts = document.split('\n');
+  return parts[parts.length - 1] === '' ? parts.length - 1 : parts.length;
+}
+
+/**
+ * Where a report actually goes. A relative path resolves against `baseDir` — the
+ * configuration file's directory, or the working directory when the servers were
+ * given as command-line flags. An absolute path is honoured as given.
+ */
+function resolveReportPath(path: string, baseDir?: string): string {
+  return isAbsolute(path) ? path : resolve(baseDir ?? process.cwd(), path);
 }
 
 export interface StartOptions {
   /** Where to write the discovery report; `DEFAULT_REPORT_PATH` when absent. */
   reportPath?: string;
+
+  /**
+   * Directory a relative `reportPath` — and a relative `reportPath` argument to
+   * the probe tool — resolves against. The configuration file's directory when
+   * the servers came from one; the working directory otherwise. Without it a
+   * report lands wherever the process happened to be started.
+   */
+  reportBaseDir?: string;
+
+  /**
+   * Probe every discovered query capability before serving, and put what each
+   * one supports into the discovery report. Off by default, and nothing is
+   * probed without it: a full probe creates a fixture, reads it back and deletes
+   * it, then issues the query cases — side effects and load on the very server
+   * this process exists to serve. Meant for a test environment.
+   */
+  probeOslc?: boolean;
 }
 
 export async function startServer(
@@ -444,7 +538,16 @@ export async function startServer(
     return runtime;
   });
 
-  writeDiscoveryReport(runtimes, options.reportPath ?? DEFAULT_REPORT_PATH);
+  // Probed BEFORE the report is written, so one artifact carries both what was
+  // discovered and what was measured. Discovery cannot answer the query-feature
+  // question: a query capability advertises a queryBase and its resource types
+  // and says nothing about which of oslc.where/select/orderBy/paging, or which
+  // where constructs, the server implements.
+  const probes = options.probeOslc ? await probeEveryQueryCapability(runtimes) : undefined;
+
+  writeDiscoveryReport(
+    runtimes, options.reportPath ?? DEFAULT_REPORT_PATH, options.reportBaseDir, probes
+  );
 
   /**
    * Route a tool call to the server that owns it. Longest prefix wins, so an
@@ -579,11 +682,15 @@ export async function startServer(
             // findings. A run over a provider with hundreds of members produces
             // megabytes of exchange, which is evidence on disk and noise here.
             if (probeArgs.reportPath) {
+              // Resolved and reported like the discovery report: the caller is an
+              // assistant that cannot know this process's working directory, so a
+              // relative path has to mean something stable.
+              const probeTarget = resolveReportPath(probeArgs.reportPath, options.reportBaseDir);
               try {
-                writeFileSync(probeArgs.reportPath, formatProbeReport(probeRun), 'utf8');
-                console.error(`[probe] wrote ${probeArgs.reportPath}`);
+                writeFileSync(probeTarget, formatProbeReport(probeRun), 'utf8');
+                console.error(`[probe] wrote ${probeTarget}`);
               } catch (err) {
-                console.error(`[probe] could not write ${probeArgs.reportPath}:`, err instanceof Error ? err.message : err);
+                console.error(`[probe] could not write ${probeTarget}:`, err instanceof Error ? err.message : err);
               }
             }
             result = formatProbeReport(probeRun, { transcripts: false });

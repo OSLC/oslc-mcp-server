@@ -15,6 +15,14 @@ interface CliArgs {
   username?: string;
   password?: string;
   configurationContext?: string;
+
+  /**
+   * Probe every discovered query capability at startup and report what each one
+   * actually supports. Off unless asked for: a full probe writes a fixture,
+   * reads it back and removes it, then issues the query cases — real load and
+   * real side effects on the server being served. Nothing is probed without it.
+   */
+  probeOslc?: boolean;
 }
 
 /**
@@ -31,6 +39,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--username': args.username = argv[++i]; break;
       case '--password': args.password = argv[++i]; break;
       case '--configuration-context': args.configurationContext = argv[++i]; break;
+      case '--probe-oslc': args.probeOslc = true; break;
     }
   }
   return args;
@@ -40,7 +49,8 @@ function parseArgs(argv: string[]): CliArgs {
  * Resolve the servers to serve, from the configuration file if one is given,
  * otherwise from CLI args and environment variables exactly as before.
  */
-function resolveServers(args: CliArgs): { servers: ResolvedServer[]; reportPath?: string } {
+function resolveServers(args: CliArgs):
+    { servers: ResolvedServer[]; reportPath?: string; reportBaseDir?: string } {
   const configPath = args.config ?? process.env.OSLC_CONFIG_FILE;
 
   if (configPath) {
@@ -60,7 +70,9 @@ function resolveServers(args: CliArgs): { servers: ResolvedServer[]; reportPath?
         serviceProviderURIs: (entry.serviceProviders ?? []).map((sp) => sp.uri),
       };
     });
-    return { servers, reportPath: file.reportPath };
+    // `file.reportPath` is already absolute — resolved against the configuration's
+    // own directory, so where you invoke this from does not move the report.
+    return { servers, reportPath: file.reportPath, reportBaseDir: file.baseDir };
   }
 
   const serverURL = args.serverURL ?? process.env.OSLC_SERVER_URL ?? '';
@@ -76,7 +88,7 @@ function resolveServers(args: CliArgs): { servers: ResolvedServer[]; reportPath?
     process.exit(1);
   }
 
-  return { servers: [{
+  return { reportBaseDir: process.cwd(), servers: [{
     alias: 'oslc',
     config: {
       serverURL,
@@ -91,7 +103,8 @@ function resolveServers(args: CliArgs): { servers: ResolvedServer[]; reportPath?
 }
 
 async function main(): Promise<void> {
-  const { servers, reportPath } = resolveServers(parseArgs(process.argv.slice(2)));
+  const args = parseArgs(process.argv.slice(2));
+  const { servers, reportPath, reportBaseDir } = resolveServers(args);
   const prefixTools = servers.length > 1;
 
   const started: StartedServer[] = [];
@@ -129,7 +142,7 @@ async function main(): Promise<void> {
     });
   }
 
-  await startServer(started, { reportPath });
+  await startServer(started, { reportPath, reportBaseDir, probeOslc: args.probeOslc });
 }
 
 main().catch((err) => {

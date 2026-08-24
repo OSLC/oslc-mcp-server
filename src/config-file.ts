@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 /** One service provider (an ELM project area) to scope discovery to. */
@@ -39,6 +40,14 @@ export interface ConfigFile {
    * missing.
    */
   reportPath?: string;
+
+  /**
+   * Directory that relative paths in this configuration resolve against — the
+   * directory holding the file, for a configuration that came from one.
+   * `undefined` for {@link parseConfigFile}, which is given text and has no
+   * location to resolve against.
+   */
+  baseDir?: string;
 }
 
 /** Default `reportPath`. */
@@ -149,5 +158,18 @@ export function parseConfigFile(yamlText: string): ConfigFile {
 }
 
 export function loadConfigFile(path: string): ConfigFile {
-  return parseConfigFile(readFileSync(path, 'utf8'));
+  const parsed = parseConfigFile(readFileSync(path, 'utf8'));
+  // A relative `reportPath` means "beside this configuration", NOT "beside
+  // wherever node happened to be invoked from". Resolving it against the
+  // process working directory made one configuration write to different places
+  // depending on the caller's shell, and left a stale report sitting next to
+  // the config looking like fresh output.
+  const baseDir = dirname(resolve(path));
+  return {
+    ...parsed,
+    baseDir,
+    reportPath: parsed.reportPath === undefined || isAbsolute(parsed.reportPath)
+      ? parsed.reportPath
+      : resolve(baseDir, parsed.reportPath),
+  };
 }
