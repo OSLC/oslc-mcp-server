@@ -37,6 +37,7 @@ CLI overrides environment variables.
 | `--username <user>` | `OSLC_USERNAME` | Username for authenticated servers |
 | `--password <pass>` | `OSLC_PASSWORD` | Password for authenticated servers |
 | `--configuration-context <uri>` | `OSLC_CONFIGURATION_CONTEXT` | OSLC `Configuration-Context` URI |
+| `--probe-oslc` | — | Probe every query capability at startup and report what each supports. **Off by default; nothing is probed without it.** Writes a fixture — see *What `--probe-oslc` measures* |
 
 ### Configuration file
 
@@ -198,6 +199,92 @@ to sort them into. Whether a missing capability is a conformant choice or someth
 judgement about the specification — and conflating the two wastes a vendor's time while costing the
 reports that *are* worth raising their credibility. A server that does not implement `oslc.orderBy`
 has done nothing wrong.
+
+### What `--probe-oslc` measures
+
+`--probe-oslc` runs the same probe at startup, against **every** query capability of every discovered
+service provider, and writes what each one supports into the discovery report. Without the flag
+nothing is probed at all: startup discovers, generates tools and serves them.
+
+```bash
+node dist/index.js --config ./oslc-mcp-server.yaml --probe-oslc
+```
+
+It is for a test environment. Each capability probed means a fixture created, read back and deleted,
+plus roughly thirty queries — 25 capabilities across three ELM servers is a few hundred requests and
+25 create/delete cycles.
+
+#### The cases, and what each verdict means
+
+`Q` below is the capability's `queryBase`. Requests go by POST-form where case 2 showed POST works,
+otherwise as `GET Q?…`. `R-7` stands for a `dcterms:identifier` value the run established identifies
+exactly one resource — the *known* resource; the *baseline* is every member the unparameterised query
+returned. No request declares `oslc.prefix`: the run is measuring which prefixes a server
+**predefines**, which is what a client can rely on without declaring anything.
+
+| Case | Request | `supported` means | Other verdicts |
+|---|---|---|---|
+| `bare-query` | `GET Q` | members came back with no parameters | `unsupported`: 4xx, or zero members. The specification does not say what a bare query returns, so this is not a defect |
+| `post-versus-get` | `POST Q` (form) and `GET Q`, both empty | both accepted | `unsupported`: only GET works — **your EWM case**. Queries are then capped by URL length, which bites on long `oslc.where`/`oslc.select` |
+| `where-identity` | `oslc.where=dcterms:identifier="R-7"` | exactly the known resource came back, **by identity** | `ignored`: the whole baseline came back, so the filter did nothing. `unsupported`: 4xx, zero, or the wrong resources |
+| `where:equality` | `dcterms:identifier="R-7"` | as above | as above |
+| `where:inequality` | `dcterms:identifier!="R-7"` | *see the limitation below* | |
+| `where:comparison` | `dcterms:identifier>"R-7"` | *see the limitation below* | |
+| `where:set-membership` | `dcterms:identifier in ["R-7"]` | exactly the known resource | `unsupported`: 4xx, or a different set |
+| `where:conjunction` | `dcterms:identifier="R-7" and dcterms:identifier="R-7"` | exactly the known resource | as above |
+| `where:scoped-terms` | `dcterms:creator{foaf:name="R-7"}` | *see the limitation below* | |
+| `where:disjunction` | `dcterms:identifier="R-7" or dcterms:identifier="R-7"` | exactly the known resource | `unsupported` is **conformant**: `or` is not in the OSLC query syntax. The reason text says so |
+| `where:wildcard` | `dcterms:identifier="R-7*"` | exactly the known resource | `unsupported` is **conformant**: wildcards are not in the syntax either |
+| `negation-pair` | `…="R-7"` then `…!="R-7"`, two requests | the two results partition the baseline: together exactly it, neither alone | `ignored`: both returned the whole baseline. `unsupported`: they overlap — which proves the filter was not applied *even though both answered 200* |
+| `select` | `oslc.select=dcterms:title`, then `dcterms:creator{foaf:name}` | the flat projection narrowed what came back; the reason says whether the nested property actually appeared | `ignored`: accepted and the properties did not narrow. `unsupported`: the flat form 4xx'd |
+| `order-by` | `oslc.orderBy=+dcterms:title`, then `-dcterms:title` | the leading member differs between the two | `ignored`: both orders lead with the same member, so ordering was not applied — **your EWM case**. `unsupported`: either direction 4xx'd |
+| `paging` | `oslc.pageSize=2` | a page of exactly 2 **and** an `oslc:nextPage` | `ignored` twice over: the whole baseline came back, *or* a page of the server's own size with `nextPage` (administrator-configured paging, which OSLC permits — paging works, you just cannot size it). `unsupported` only when the collection is truncated with **no** `nextPage`, so the rest is unreachable |
+| `search-terms` | `oslc.searchTerms=<word unique to one resource>` | that resource, by identity | `unsupported`: 4xx — **your EWM case**, full-text search is not implemented. Optional in OSLC |
+| `prefix-discovery:oslc.where` | `oslc.where=dcterms:identifier="R-7"` with **no `oslc.prefix` declaration** | the server predefines `dcterms`: the undeclared prefix was accepted *and took effect* | `unsupported`: 4xx, so `dcterms` is not predefined for filtering. `inconclusive` when the clause was accepted but **ignored** — acceptance then says nothing about the prefix. A server that ignores `oslc.where` accepts every prefix, and reading that as "all prefixes predefined" is exactly backwards |
+| `prefix-discovery:oslc.select` | `oslc.select=dcterms:title`, likewise undeclared | `dcterms` is predefined for projection too | `unsupported`: 4xx. Probed separately from the above because a server may resolve prefixes when filtering but not when projecting |
+
+The five verdicts:
+
+- **`supported`** — the effect was observed, by identity where a filter is involved. Never inferred
+  from a `200`.
+- **`ignored`** — accepted and did nothing. **The one that matters.** A `200` means the parameter
+  parsed, not that it acted, and a server returning the unfiltered set for a valid `oslc.where` is
+  the failure no status code shows.
+- **`unsupported`** — refused (4xx), or answered with something other than the expected effect. For
+  `disjunction` and `wildcard` this is *conformant*, and the reason text says so.
+- **`inconclusive`** — could not be settled, usually because the data could not distinguish anything:
+  a baseline under two members cannot tell a filter from no filter. Carries what a correct result
+  would look like, so you can check it in the server's own UI.
+- **`error`** — the exchange itself failed.
+
+#### Read-only mode weakens the run
+
+`read-only: the creation factory refused a create with 403` in the report means no fixture was
+established, so ground truth was **sampled from existing content**. Filters are still judged by
+identity, but three things cannot be measured at all: properties silently dropped on create, whether
+an update becomes visible to query, and whether a created resource becomes visible to query. A `403`
+there is an authorization outcome, not a capability one — the probe reports what the server said and
+does not guess which.
+
+#### Each construct is judged against its own correct answer
+
+A construct's clause decides what a correct response is, and three of the eight do not mean "exactly
+the one known resource":
+
+| Construct | A conformant server returns | Judged by |
+|---|---|---|
+| `inequality` — `…!="R-7"` | the baseline **without** R-7 | exclusion: R-7 absent and others present. A *paged* complement still counts, since the baseline is only page one — demanding the exact complement reported a working `!=` as broken |
+| `comparison` — `…>"R-7"` | a **range**, boundary excluded | two collation-independent invariants: a strict `>` never returns R-7 itself, and a clause that was applied does not return the whole baseline. An **empty** result is `inconclusive`, because a boundary at the greatest value and a dropped clause look identical |
+| `scoped-terms` — `dcterms:creator{foaf:name="R-7"}` | **nothing** — no creator is *named* like an identifier value | a refusal is the only sound signal, so a 4xx is `unsupported` and acceptance is `inconclusive`. It is not evidence either way |
+
+The other five (`equality`, `set-membership`, `conjunction`, `disjunction`, `wildcard`) are judged by
+identity, because as templated here each names a single value that one resource carries.
+
+Reading a `NO` on the first three before this was fixed: it was only real when the reason said
+`answered <4xx>`. `negation-pair` was unaffected throughout — it checks that a filter and its
+negation *partition* the baseline rather than comparing against a fixed expected set, which is why a
+server could report `inequality NO` and `negation-pair yes` at the same time. That contradiction was
+the symptom.
 
 ### The discovery report
 

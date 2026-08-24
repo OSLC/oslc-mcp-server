@@ -152,6 +152,49 @@ The honest verdict is that the parameter was **ignored**: accepted, and somethin
 
 `probe_oslc` reports it that way: `ignored` where the page came back at a size the server chose *and* `oslc:nextPage` was offered, and `unsupported` only where fewer members came back than the baseline with **no** `oslc:nextPage` — the one case in which the rest genuinely cannot be reached.
 
+### 12. EWM answers **403** for an unmet save precondition, and only some work-item types can be created blind
+
+Observed 2026-08-24 against EWM at `trs-filter.smartfacts.com/ccm`, project area `JKE Banking (Change Management)`.
+
+A POST of a minimal change request to the **Defect** creation factory answers:
+
+```
+403 Forbidden
+oslc:message  'Save Work Item' failed. Preconditions have not been met:
+              The 'Filed Against' attribute needs to be set
+```
+
+**The status is wrong for the cause.** `403` reads as authorization. It is not: the same credentials
+read the project area and its shapes, a malformed body answers `400` with a Jena parse error, and an
+anonymous request answers `401`. A precondition failure is `400`-shaped, `409` at worst. Treat a
+`403` from an EWM creation factory as "read the `oslc:message`", never as "check the user's roles" —
+that misreading cost us an afternoon.
+
+**The shape does declare the requirement**, and this is worth stating because it is easy to conclude
+otherwise: `rtc_cm:filedAgainst` is `oslc:occurs oslc:Exactly-one` with **13 `oslc:allowedValue`
+categories**, and the generated create tool's schema correctly reports
+`required: ["title","filedAgainst"]` with the URIs as an enum. A client that reads the shape properly
+has everything it needs.
+
+**But one allowed value is a trap.** The thirteenth category is **`Unassigned`** — EWM's placeholder
+for *not filed*. It is offered as a legal `oslc:allowedValue` and rejected with the same 403 as
+sending nothing. A client that picks an arbitrary allowed value has a 1-in-13 chance of picking the
+one that cannot work, and nothing in the shape distinguishes it.
+
+**Requirements vary by work-item type.** Of the ten factories in this project area:
+
+| Required properties | Types |
+|---|---|
+| `title` only | **Task** |
+| `title` + `filedAgainst` | Defect, Story, Epic, Impediment, Retrospective, Adoption Item, Track Build Item, and the generic change-request factory |
+
+So `Task` is the only type creatable from shape knowledge alone. `dcterms:identifier` is ignored on
+create (correctly — Core makes it server-assigned) and `dcterms:type` is unnecessary because the
+factory URL carries the subtype.
+
+`probe_oslc` now reads required properties from the shape, supplies a required reference from its
+first allowed value, and carries the server's `oslc:message` into its report.
+
 ### 9. No per-type `query_<type>` tools are generated for any application
 
 Discovery finds query capabilities — 8 in DOORS Next, 2 in EWM — but tool generation produces only `create_*` tools from creation factories. Querying is therefore possible only through the generic `query_resources` tool, which requires the caller to supply a `queryBase` URI it has no way to discover from the tool schema alone.
@@ -166,7 +209,7 @@ Generated tool names also derive from factory *titles* rather than resource type
 - **Whether create, update and delete actually work.** `list_resource_types` and unfiltered query are confirmed against all applications that support them; the write path has not been exercised.
 - **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
 - **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
-- **Whether creation factories enforce their advertised shapes**, and which properties are genuinely writable. A factory advertises a shape; it does not advertise whether it means it.
+- ~~**Whether creation factories enforce their advertised shapes**~~ — **answered: yes, and more strictly than the shape reads.** EWM enforces exactly what its shape declares required (`title`, `filedAgainst`), and additionally rejects one of that property's own advertised allowed values (`Unassigned`). See quirk 12. Which properties are genuinely *writable* remains open.
 
 ---
 
