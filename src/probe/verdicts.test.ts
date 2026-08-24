@@ -49,9 +49,15 @@ describe('judgePartition', () => {
     expect(v.reason).toMatch(/overlap/i);
   });
 
-  it('is unsupported when the sets do not account for the baseline', () => {
+  it('accepts halves that do not exhaust the baseline, and says why', () => {
+    // Changed deliberately. A property filter matches only resources carrying the
+    // property, so anything without it falls outside both `a="v"` and `a!="v"`.
+    // DOORS Next's unfiltered requirement query returns internal materialized
+    // views alongside its artifacts, and requiring the halves to account for the
+    // whole baseline reported that working negation as broken.
     const v = judgePartition({ matching: ['r/1'], notMatching: ['r/2'], baseline: BASE });
-    expect(v.verdict).toBe('unsupported');
+    expect(v.verdict).toBe('supported');
+    expect(v.reason).toContain('fall outside both');
   });
 });
 
@@ -155,5 +161,86 @@ describe('the identity expectation is not applied to every construct', () => {
       .toBe('unsupported');
     expect(judgeComplement({ returned: ['b', 'c'], excludedURI: 'a', baseline }).verdict)
       .toBe('supported');
+  });
+});
+
+describe('memberURIs — membership predicates other than rdfs:member', () => {
+  const QB = 'https://elm.example.com/qm/resources/TestCase';
+  const wrap = (inner: string) =>
+    `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+              xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+              xmlns:oslc="http://open-services.net/ns/core#"
+              xmlns:dcterms="http://purl.org/dc/terms/"
+              xmlns:oslc_qm="http://open-services.net/ns/qm#">${inner}</rdf:RDF>`;
+
+  it('still prefers rdfs:member where a server uses it', () => {
+    const body = wrap(`<rdf:Description rdf:about="${QB}">
+      <rdfs:member rdf:resource="${QB}/1"/><rdfs:member rdf:resource="${QB}/2"/>
+    </rdf:Description>`);
+    expect(memberURIs(body, QB)).toEqual([`${QB}/1`, `${QB}/2`]);
+  });
+
+  it('finds members linked by a domain predicate — ELM QM uses oslc_qm:testCase', () => {
+    // Reported 30 test cases as zero, which then made every filter case
+    // inconclusive for want of a baseline. A 200 with results is not empty.
+    const body = wrap(`<rdf:Description rdf:about="${QB}">
+      <oslc_qm:testCase rdf:resource="${QB}/1"/>
+      <oslc_qm:testCase rdf:resource="${QB}/2"/>
+    </rdf:Description>`);
+    expect(memberURIs(body, QB)).toEqual([`${QB}/1`, `${QB}/2`]);
+  });
+
+  it('reads members off an oslc:ResponseInfo published under its own paged URI', () => {
+    const body = wrap(`<rdf:Description rdf:about="${QB}?pageNum=0">
+      <rdf:type rdf:resource="http://open-services.net/ns/core#ResponseInfo"/>
+      <oslc:totalCount>2</oslc:totalCount>
+      <dcterms:title>Results</dcterms:title>
+      <oslc_qm:testCase rdf:resource="${QB}/1"/>
+    </rdf:Description>`);
+    expect(memberURIs(body, QB)).toEqual([`${QB}/1`]);
+  });
+
+  it('does not mistake a container’s own description for membership', () => {
+    const body = wrap(`<rdf:Description rdf:about="${QB}">
+      <rdf:type rdf:resource="http://open-services.net/ns/core#ResponseInfo"/>
+      <dcterms:title>Results</dcterms:title>
+      <oslc:serviceProvider rdf:resource="https://elm.example.com/qm/sp"/>
+      <oslc:nextPage rdf:resource="${QB}?page=2"/>
+      <oslc:instanceShape rdf:resource="https://elm.example.com/qm/shape"/>
+    </rdf:Description>`);
+    expect(memberURIs(body, QB)).toEqual([]);
+  });
+});
+
+describe('judgePartition — resources that carry no value for the property', () => {
+  it('accepts a partition that leaves out resources lacking the property', () => {
+    // DOORS Next returns four internal materialized views alongside its artifacts.
+    // A filter on dcterms:identifier can only match resources that have one, so
+    // both halves leave them out — correctly. Demanding they be accounted for
+    // reported a working negation as broken.
+    const baseline = ['a', 'b', 'c', 'view1', 'view2'];
+    const judged = judgePartition({ matching: ['a'], notMatching: ['b', 'c'], baseline });
+    expect(judged.verdict).toBe('supported');
+    expect(judged.reason).toContain('fall outside both');
+  });
+
+  it('still reports an overlap, which no filter can produce', () => {
+    expect(judgePartition({ matching: ['a', 'b'], notMatching: ['b', 'c'], baseline: ['a', 'b', 'c'] }).verdict)
+      .toBe('unsupported');
+  });
+
+  it('still calls it ignored when both halves return everything', () => {
+    const baseline = ['a', 'b', 'c'];
+    expect(judgePartition({ matching: baseline, notMatching: baseline, baseline }).verdict).toBe('ignored');
+  });
+
+  it('rejects a result carrying resources the unfiltered query never returned', () => {
+    expect(judgePartition({ matching: ['a'], notMatching: ['b', 'z'], baseline: ['a', 'b', 'c'] }).verdict)
+      .toBe('unsupported');
+  });
+
+  it('rejects two empty halves', () => {
+    expect(judgePartition({ matching: [], notMatching: [], baseline: ['a', 'b', 'c'] }).verdict)
+      .toBe('unsupported');
   });
 });

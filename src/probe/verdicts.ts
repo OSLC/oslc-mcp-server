@@ -31,6 +31,30 @@ export interface CaseResult {
  * than an exception — a body that does not parse is a result to record, not a
  * crash.
  */
+const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+const OSLC_RESPONSE_INFO = 'http://open-services.net/ns/core#ResponseInfo';
+
+/**
+ * Predicates a container carries that are description, not membership.
+ *
+ * Needed because membership is inferred structurally when no standard predicate
+ * is present, and a container also says things about itself. Kept deliberately
+ * short: anything not listed is treated as membership, so a domain predicate
+ * nobody anticipated still counts — which is the whole point.
+ */
+const NOT_MEMBERSHIP = new Set([
+  RDF_TYPE,
+  'http://open-services.net/ns/core#nextPage',
+  'http://open-services.net/ns/core#responseInfo',
+  'http://open-services.net/ns/core#totalCount',
+  'http://open-services.net/ns/core#serviceProvider',
+  'http://open-services.net/ns/core#instanceShape',
+  'http://open-services.net/ns/basicProfile#containerSortPredicates',
+  'http://purl.org/dc/terms/title',
+  'http://purl.org/dc/terms/description',
+  'http://purl.org/dc/terms/publisher',
+]);
+
 export function memberURIs(rdfXml: string, queryBase: string): string[] {
   const store = graph();
   try {
@@ -42,6 +66,27 @@ export function memberURIs(rdfXml: string, queryBase: string): string[] {
   for (const predicate of [RDFS_MEMBER, LDP_CONTAINS]) {
     for (const statement of store.statementsMatching(null, sym(predicate), null)) {
       if (statement.object.termType === 'NamedNode') uris.push(statement.object.value);
+    }
+  }
+  if (uris.length > 0) return [...new Set(uris)];
+
+  // No standard membership predicate. That is not an empty result: OSLC's domain
+  // specifications give query responses their own membership predicate, and ELM's
+  // QM server uses one — a Test Case query answers 200 with `oslc:totalCount 30`
+  // and links each result by `oslc_qm:testCase`, never `rdfs:member`. Reading only
+  // the standard predicates reported thirty test cases as zero, and every filter
+  // case then went `inconclusive` for want of a baseline.
+  //
+  // So membership is taken structurally: whatever the container points at. The
+  // container is the query base, or the `oslc:ResponseInfo` node, which ELM
+  // publishes under a paged URI of its own rather than the query base.
+  const containers = [sym(queryBase), ...store.each(null, sym(RDF_TYPE), sym(OSLC_RESPONSE_INFO))];
+  for (const container of containers) {
+    for (const statement of store.statementsMatching(container as never, null, null)) {
+      if (statement.object.termType !== 'NamedNode') continue;
+      if (NOT_MEMBERSHIP.has(statement.predicate.value)) continue;
+      if (statement.object.value === container.value) continue;
+      uris.push(statement.object.value);
     }
   }
   return [...new Set(uris)];
@@ -205,15 +250,36 @@ export function judgePartition(args: {
       reason: `${overlap.length} resource(s) overlap: they matched both a filter and its negation, which cannot both be true`,
     };
   }
-  if (!sameSet([...matching, ...notMatching], baseline)) {
+  // A resource NOT in either half is not a failure. A property filter can only
+  // match resources that carry the property, so anything lacking it falls outside
+  // both `a="v"` and `a!="v"` — correctly. DOORS Next's unfiltered requirement
+  // query returns four `materializedviews/VW_…` objects alongside its 578
+  // artifacts; they are internal, they 403 on GET, and both halves rightly leave
+  // them out. Demanding that the two halves exhaust the baseline reported that as
+  // a broken negation.
+  //
+  // What must hold is that the halves do not overlap, that each is a proper part,
+  // and that neither strays outside the baseline.
+  const strays = [...matching, ...notMatching].filter((uri) => !baseline.includes(uri));
+  if (strays.length > 0) {
     return {
       verdict: 'unsupported',
-      reason:
-        `a filter and its negation returned ${matching.length + notMatching.length} resources between them, ` +
-        `against a baseline of ${baseline.length} — they do not account for it`,
+      reason: `${strays.length} resource(s) were returned that the unfiltered query did not`,
     };
   }
-  return { verdict: 'supported', reason: 'the filter and its negation partition the baseline exactly' };
+  if (matching.length === 0 && notMatching.length === 0) {
+    return { verdict: 'unsupported', reason: 'neither the filter nor its negation returned anything' };
+  }
+
+  const accounted = matching.length + notMatching.length;
+  return accounted === baseline.length
+    ? { verdict: 'supported', reason: 'the filter and its negation partition the baseline exactly' }
+    : {
+        verdict: 'supported',
+        reason:
+          `the filter and its negation partition ${accounted} of ${baseline.length} without overlap; ` +
+          `${baseline.length - accounted} carry no value for the property and fall outside both, as they should`,
+      };
 }
 
 /** Ordering took effect when the leading member differs between directions. */
