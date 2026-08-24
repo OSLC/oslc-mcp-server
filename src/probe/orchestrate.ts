@@ -21,6 +21,8 @@ import {
   caseSelect,
   caseWhereConstructs,
   caseWhereIdentity,
+  PROBE_PREFIXES,
+  resolveDistinguishing,
   type CaseContext,
 } from './query-cases.js';
 
@@ -167,12 +169,46 @@ async function readBackGroundTruth(
 /** Every case, in order, flattened — the ones returning lists included. */
 async function runCases(ctx: CaseContext): Promise<CaseResult[]> {
   // casePostVersusGet is run by detectUsePost before this, so it is not repeated.
+  //
+  // Prefix discovery goes FIRST, and undeclared — it is the case that measures
+  // whether a prefix has to be declared, so declaring one would answer its own
+  // question. Every later case then takes the answer: where the server
+  // predefines nothing, they declare prefixes explicitly instead of failing for
+  // a reason already established. DOORS Next predefines none, and without this
+  // its select, where and construct cases all recorded 400s that said nothing
+  // about its query support.
+  const results: CaseResult[] = [...(await casePrefixDiscovery(ctx))];
+  const predefined = results.some((r) => r.verdict === 'supported');
+  const declared: CaseContext = predefined ? ctx : { ...ctx, prefixes: PROBE_PREFIXES };
+  if (!predefined) {
+    results.push({
+      name: 'prefix-declaration',
+      verdict: 'supported',
+      reason: `no prefix was predefined, so the remaining cases declare them: ${PROBE_PREFIXES}`,
+      transcripts: [],
+    });
+  }
+
+  // Confirm, by query, a value that identifies exactly one resource — once, so
+  // every filter case builds on the same confirmed value instead of each trusting
+  // a sample of five that may not be unique across the collection.
+  const resolved = await resolveDistinguishing(declared);
+  const withKnown: CaseContext = { ...declared, known: resolved.known, knownReason: resolved.reason };
+  results.push({
+    name: 'distinguishing-value',
+    verdict: resolved.known ? 'supported' : 'inconclusive',
+    reason: resolved.reason,
+    ...(resolved.known ? {} : {
+      expected: 'a filter on one sampled value returns exactly the resource that carries it, ' +
+        'which the identity, negation, construct and prefix cases all build on',
+    }),
+    transcripts: [],
+  });
+
   const single = [caseBareGet, caseWhereIdentity, caseNegationPair,
                   caseSelect, caseOrderBy, casePaging, caseSearchTerms];
-  const results: CaseResult[] = [];
-  for (const one of single) results.push(await one(ctx));
-  results.push(...(await casePrefixDiscovery(ctx)));
-  results.push(...(await caseWhereConstructs(ctx)));
+  for (const one of single) results.push(await one(withKnown));
+  results.push(...(await caseWhereConstructs(withKnown)));
   return results;
 }
 
@@ -206,7 +242,7 @@ export async function runProbe(args: {
   const readOnly = async (modeReason: string, deleteSupported: boolean | null): Promise<ProbeRun> => {
     // Phases 4 and 7 only, with ground truth sampled from what is already there.
     const { usePost, caseResult: methodCase } = await detectUsePost(http, queryBase);
-    const baseline = memberURIs(await bodyOf(http, queryBase, usePost), queryBase);
+    const baseline = memberURIs(await bodyOf(http, queryBase), queryBase);
     const truth = await sampleGroundTruth(http, baseline);
     const cases = [methodCase, ...(await runCases({ http, queryBase, truth, usePost }))];
     return { mode: 'read-only', modeReason, serviceProvidersWritten, cases, needingCleanup, deleteSupported };
@@ -323,9 +359,15 @@ function emptyTruth(): GroundTruth {
   return { kind: 'sampled', resources: [], baseline: [] };
 }
 
-async function bodyOf(http: ProbeHttp, queryBase: string, usePost: boolean): Promise<string> {
-  const response = usePost
-    ? await probeQueryPost(http, queryBase, [])
-    : await probeQueryGet(http, queryBase, []);
-  return response.body;
+/**
+ * The unparameterised query, for the baseline.
+ *
+ * Always GET, whatever `post-versus-get` concluded: a form POST with an empty
+ * body is not an OSLC query — ETM and DOORS Next answer 415 and 403 to one — and
+ * POST-query exists for parameter lists too long for a URL, which an
+ * unparameterised query does not have. Sending it as POST because POST *works*
+ * emptied the baseline and took every filter case with it.
+ */
+async function bodyOf(http: ProbeHttp, queryBase: string): Promise<string> {
+  return (await probeQueryGet(http, queryBase, [])).body;
 }

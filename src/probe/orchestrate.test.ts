@@ -283,3 +283,68 @@ describe('a refusal carries the server’s own explanation', () => {
     expect(run.modeReason).toContain("'Filed Against' attribute needs to be set");
   });
 });
+
+describe('prefixes are declared once discovery shows they are not predefined', () => {
+  const MEMBERS = [R(1), R(2), R(3), R(4), R(5)];
+  const clauseOf = (params: Record<string, string>) =>
+    `${params['oslc.where'] ?? ''} ${params['oslc.select'] ?? ''} ${params['oslc.orderBy'] ?? ''}`;
+
+  /** Requests recorded as parameter maps, whichever method carried them. */
+  function recorder(predefinesPrefixes: boolean) {
+    const sent: Array<Record<string, string>> = [];
+    const request = jest.fn(async (config: any) => {
+      const url = String(config.url);
+      if (config.method === 'GET' && /\/r\/\d+$/.test(url)) {
+        // Ground truth: each member carries a distinct title and identifier.
+        const n = url.slice(-1);
+        return { status: 200, headers: { 'content-type': 'application/rdf+xml' },
+                 data: resourceBody(url, `PROBE-0${n}`, `Probe 0${n}`) };
+      }
+      const params = Object.fromEntries(new URLSearchParams(
+        config.method === 'POST' ? String(config.data ?? '') : (url.split('?')[1] ?? '')
+      ).entries());
+      sent.push(params);
+      if (!predefinesPrefixes && /(?:^|[^\w])(dcterms|foaf):/.test(clauseOf(params)) && !params['oslc.prefix']) {
+        // What DOORS Next answers: 400 Undefined namespace prefix: dcterms
+        return { status: 400, headers: {}, data: 'Undefined namespace prefix: dcterms' };
+      }
+      return { status: 200, headers: { 'content-type': 'application/rdf+xml' }, data: membersBody(MEMBERS) };
+    });
+    return { sent, http: { request } as any };
+  }
+
+  const runWith = (predefines: boolean, sent: Array<Record<string, string>>, http: any) =>
+    runProbe({ http, sp: sp({ factories: [] }), queryBase: QUERY_BASE,
+               onDeleteUnsupported: 'read-only', manifestWrite: () => {} });
+
+  it('declares them for later cases, and records that it did', async () => {
+    const { sent, http } = recorder(false);
+    const run = await runWith(false, sent, http);
+
+    expect(run.cases.find((c) => c.name === 'prefix-declaration')?.reason).toContain('dcterms=');
+
+    const prefixed = sent.filter((p) => /(dcterms|foaf):/.test(clauseOf(p)));
+    const undeclared = prefixed.filter((p) => p['oslc.prefix'] === undefined);
+    // Exactly the two prefix-discovery probes go without a declaration — one for
+    // oslc.where and one for oslc.select. That case exists to find out whether a
+    // declaration is needed, so declaring would answer its own question.
+    expect(undeclared).toHaveLength(2);
+    // Everything after them carries one.
+    expect(prefixed.slice(2).every((p) => typeof p['oslc.prefix'] === 'string')).toBe(true);
+  });
+
+  it('measures select as supported once the prefix is declared', async () => {
+    // The defect this fixes: DOORS Next recorded `select: NO` for a missing
+    // declaration, not for missing support.
+    const { sent, http } = recorder(false);
+    const run = await runWith(false, sent, http);
+    expect(run.cases.find((c) => c.name === 'select')?.verdict).not.toBe('unsupported');
+  });
+
+  it('declares nothing when the server predefines prefixes', async () => {
+    const { sent, http } = recorder(true);
+    const run = await runWith(true, sent, http);
+    expect(run.cases.find((c) => c.name === 'prefix-declaration')).toBeUndefined();
+    expect(sent.every((p) => p['oslc.prefix'] === undefined)).toBe(true);
+  });
+});

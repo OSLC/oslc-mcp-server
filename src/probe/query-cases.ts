@@ -1,7 +1,9 @@
 import { probeQueryGet, probeQueryPost, type ProbeHttp, type ProbeResponse } from './request.js';
 import {
   canOrderBy,
-  distinguishingValue,
+  distinguishingCandidates,
+  filterablePredicates,
+  type Distinguishing,
   enoughForPaging,
   termForSearch,
   type GroundTruth,
@@ -17,7 +19,6 @@ import {
 } from './verdicts.js';
 
 const DCTERMS_TITLE = 'http://purl.org/dc/terms/title';
-const DCTERMS_IDENTIFIER = 'http://purl.org/dc/terms/identifier';
 
 /** What every case needs: how to send, where to send it, and what is known. */
 export interface CaseContext {
@@ -26,7 +27,40 @@ export interface CaseContext {
   truth: GroundTruth;
   /** POST-form query by default (§6.3); GET where case 2 showed POST does not work. */
   usePost: boolean;
+  /**
+   * An `oslc.prefix` declaration to send with every request, set once
+   * prefix discovery has shown the server predefines nothing.
+   *
+   * DOORS Next predefines no prefixes at all: `oslc.select=dcterms:title`
+   * answers `400 Undefined namespace prefix: dcterms`. Without this, every case
+   * after prefix discovery failed for a reason prefix discovery had already
+   * established, and `select: NO` recorded a missing declaration as missing
+   * support.
+   */
+  prefixes?: string;
+  /**
+   * A value confirmed by query to identify exactly one resource, resolved once
+   * before the filter cases run. Absent when nothing could be confirmed.
+   */
+  known?: Distinguishing;
+  /**
+   * Why {@link known} is absent, in the run's own terms — a data limit, or a
+   * server that returned the whole baseline for every candidate.
+   */
+  knownReason?: string;
 }
+
+/**
+ * The prefixes the probe's own clauses use, as an `oslc.prefix` value.
+ *
+ * Only these: a declaration is a claim about what the clause needs, and padding
+ * it with prefixes no case uses would test the server's tolerance for unused
+ * declarations rather than its query support.
+ */
+export const PROBE_PREFIXES = [
+  'dcterms=<http://purl.org/dc/terms/>',
+  'foaf=<http://xmlns.com/foaf/0.1/>',
+].join(',');
 
 /**
  * What a correct answer to a construct looks like, which is not the same for all
@@ -69,9 +103,15 @@ export const WHERE_CONSTRUCTS: Array<{
 
 /** Send by whichever method the context selected, recording the exchange. */
 function send(ctx: CaseContext, params: Array<[string, string]>): Promise<ProbeResponse> {
-  return ctx.usePost
-    ? probeQueryPost(ctx.http, ctx.queryBase, params)
-    : probeQueryGet(ctx.http, ctx.queryBase, params);
+  const withPrefixes: Array<[string, string]> = ctx.prefixes
+    ? [['oslc.prefix', ctx.prefixes], ...params]
+    : params;
+  // Nothing to send, nothing to POST: a form POST with an empty body is not a
+  // query, and servers answer 415 or 403 to it. POST-query is for parameter lists
+  // too long for a URL, so an unparameterised query has no use for it.
+  return ctx.usePost && withPrefixes.length > 0
+    ? probeQueryPost(ctx.http, ctx.queryBase, withPrefixes)
+    : probeQueryGet(ctx.http, ctx.queryBase, withPrefixes);
 }
 
 /**
@@ -94,6 +134,55 @@ function statusFailure(name: string, response: ProbeResponse, what: string): Cas
     reason: `${what} answered ${response.status}`,
     transcripts: [response.transcript],
   };
+}
+
+/**
+ * Confirm, by query, a value that identifies exactly one resource.
+ *
+ * Ground truth samples five members, so a value unique among those five may be
+ * shared by hundreds outside them — DOORS Next has 582 artifacts and repeated
+ * template titles. Filtering on such a value returns several resources and the
+ * case reports `unsupported` for a filter that did exactly the right thing.
+ *
+ * Each candidate is tried until one comes back alone. A candidate that returns
+ * the WHOLE baseline is not a data problem and stops the search: no value can be
+ * confirmed against a server that is not filtering, and reporting that as "no
+ * distinguishing value" would hide the finding the filter cases exist to make.
+ */
+export async function resolveDistinguishing(
+  ctx: CaseContext
+): Promise<{ known?: Distinguishing; reason: string }> {
+  const candidates = distinguishingCandidates(ctx.truth);
+  if (candidates.length === 0) {
+    return { reason: ctx.knownReason ?? 'no value identifies exactly one resource' };
+  }
+
+  const notUnique: string[] = [];
+  for (const candidate of candidates) {
+    const response = await send(ctx, [['oslc.where', `${candidate.term}="${candidate.value}"`]]);
+    if (response.status >= 400) {
+      return { reason: `a filter on ${candidate.term} answered ${response.status}` };
+    }
+    const returned = memberURIs(response.body, ctx.queryBase);
+    if (returned.length === 1 && returned[0] === candidate.uri) {
+      return { known: candidate, reason: `${candidate.term}="${candidate.value}" returns exactly one resource` };
+    }
+    if (sameMembers(returned, ctx.truth.baseline)) {
+      return {
+        reason: 'every candidate filter returned the whole baseline, so the server is not filtering ' +
+          'and no value can be confirmed',
+      };
+    }
+    notUnique.push(`${candidate.value} (${returned.length})`);
+  }
+  return {
+    reason: `no sampled value proved unique when queried: ${notUnique.slice(0, 3).join(', ')}`,
+  };
+}
+
+/** Set equality over member lists. */
+function sameMembers(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((uri) => b.includes(uri));
 }
 
 /**
@@ -124,8 +213,17 @@ export async function caseBareGet(ctx: CaseContext): Promise<CaseResult> {
  * at the URL length limit.
  */
 export async function casePostVersusGet(ctx: CaseContext): Promise<CaseResult> {
-  const asPost = await probeQueryPost(ctx.http, ctx.queryBase, []);
-  const asGet = await probeQueryGet(ctx.http, ctx.queryBase, []);
+  // A real query, carried both ways. An EMPTY body was the bug: a form POST with
+  // nothing in it is not an OSLC query, and ETM answers 415 to it while accepting
+  // the same query with parameters — so POST-query was reported unsupported, and
+  // the run then fell back to GET and claimed queries were capped by URL length.
+  //
+  // `oslc.pageSize` because this case runs before prefix discovery: a parameter
+  // that names no prefix cannot fail for want of a declaration, so the only
+  // difference between the two requests stays the method.
+  const query: Array<[string, string]> = [['oslc.pageSize', '1']];
+  const asPost = await probeQueryPost(ctx.http, ctx.queryBase, query);
+  const asGet = await probeQueryGet(ctx.http, ctx.queryBase, query);
   const transcripts = [asPost.transcript, asGet.transcript];
   const postOk = asPost.status < 400;
   const getOk = asGet.status < 400;
@@ -154,16 +252,16 @@ export async function casePostVersusGet(ctx: CaseContext): Promise<CaseResult> {
 
 /** Case 3 — filter on a value known to identify exactly one resource. */
 export async function caseWhereIdentity(ctx: CaseContext): Promise<CaseResult> {
-  const known = distinguishingValue(ctx.truth, DCTERMS_IDENTIFIER);
+  const known = ctx.known;
   if (!known) {
     return inconclusive(
       'where-identity',
-      `no value of ${DCTERMS_IDENTIFIER} identifies exactly one resource`,
-      'a filter on a unique identifier returns exactly that one resource'
+      ctx.knownReason ?? 'no value identifies exactly one resource',
+      'a filter on a value unique to one resource returns exactly that resource'
     );
   }
-  const response = await send(ctx, [['oslc.where', `dcterms:identifier="${known.value}"`]]);
-  const failed = statusFailure('where-identity', response, 'a filter on dcterms:identifier');
+  const response = await send(ctx, [['oslc.where', `${known.term}="${known.value}"`]]);
+  const failed = statusFailure('where-identity', response, `a filter on ${known.term}`);
   if (failed) return failed;
   const judged = judgeFilter({
     returned: memberURIs(response.body, ctx.queryBase),
@@ -181,16 +279,16 @@ export async function caseWhereIdentity(ctx: CaseContext): Promise<CaseResult> {
  * filter was not applied even where both requests answered 200.
  */
 export async function caseNegationPair(ctx: CaseContext): Promise<CaseResult> {
-  const known = distinguishingValue(ctx.truth, DCTERMS_IDENTIFIER);
+  const known = ctx.known;
   if (!known) {
     return inconclusive(
       'negation-pair',
-      `no value of ${DCTERMS_IDENTIFIER} identifies exactly one resource`,
+      ctx.knownReason ?? 'no value identifies exactly one resource',
       'a filter and its negation together return the baseline exactly, and neither alone'
     );
   }
-  const matching = await send(ctx, [['oslc.where', `dcterms:identifier="${known.value}"`]]);
-  const notMatching = await send(ctx, [['oslc.where', `dcterms:identifier!="${known.value}"`]]);
+  const matching = await send(ctx, [['oslc.where', `${known.term}="${known.value}"`]]);
+  const notMatching = await send(ctx, [['oslc.where', `${known.term}!="${known.value}"`]]);
   const transcripts = [matching.transcript, notMatching.transcript];
 
   for (const [response, label] of [[matching, 'the filter'], [notMatching, 'its negation']] as const) {
@@ -370,18 +468,23 @@ export async function caseSearchTerms(ctx: CaseContext): Promise<CaseResult> {
  * reading that as "all prefixes predefined" would be exactly backwards.
  */
 export async function casePrefixDiscovery(ctx: CaseContext): Promise<CaseResult[]> {
-  const known = distinguishingValue(ctx.truth, DCTERMS_IDENTIFIER);
+  // An UNCONFIRMED candidate is enough here, and necessary: this case runs before
+  // the distinguishing value is confirmed, because confirming one needs a query
+  // whose prefixes may have to be declared — which is what this case decides. A
+  // clause that is accepted but ignored is recorded inconclusive either way, so
+  // uniqueness does not change any verdict this case can reach.
+  const known = ctx.known ?? distinguishingCandidates(ctx.truth)[0];
   if (!known) {
     return [inconclusive(
       'prefix-discovery',
-      `no value of ${DCTERMS_IDENTIFIER} identifies exactly one resource, so a prefix cannot be tested on a valid term`,
+      ctx.knownReason ?? 'no value identifies exactly one resource' + ', so a prefix cannot be tested on a valid term',
       'an undeclared but predefined prefix is accepted; an unknown one is refused naming the prefix'
     )];
   }
 
   const results: CaseResult[] = [];
   for (const [param, clause] of [
-    ['oslc.where', `dcterms:identifier="${known.value}"`],
+    ['oslc.where', `${known.term}="${known.value}"`],
     ['oslc.select', 'dcterms:title'],
   ] as const) {
     const name = `prefix-discovery:${param}`;
@@ -431,11 +534,11 @@ export async function casePrefixDiscovery(ctx: CaseContext): Promise<CaseResult[
  * request carrying several would attribute a single rejection to all of them.
  */
 export async function caseWhereConstructs(ctx: CaseContext): Promise<CaseResult[]> {
-  const known = distinguishingValue(ctx.truth, DCTERMS_IDENTIFIER);
+  const known = ctx.known;
   if (!known) {
     return [inconclusive(
       'where-constructs',
-      `no value of ${DCTERMS_IDENTIFIER} identifies exactly one resource`,
+      ctx.knownReason ?? 'no value identifies exactly one resource',
       'each construct either filters, is refused, or is accepted and ignored'
     )];
   }
@@ -443,7 +546,7 @@ export async function caseWhereConstructs(ctx: CaseContext): Promise<CaseResult[
   const results: CaseResult[] = [];
   for (const construct of WHERE_CONSTRUCTS) {
     const name = `where:${construct.name}`;
-    const clause = construct.template('dcterms:identifier', known.value);
+    const clause = construct.template(known.term, known.value);
     const response = await send(ctx, [['oslc.where', clause]]);
     const transcripts = [response.transcript];
 

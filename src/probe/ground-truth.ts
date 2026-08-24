@@ -60,6 +60,78 @@ export function distinguishingValue(
 }
 
 /** Ordering can only be observed when at least two values differ. */
+/** A predicate that can carry a filter, with the prefixed term a clause needs. */
+export interface Distinguishing {
+  /** Full predicate URI. */
+  predicate: string;
+  /** The prefixed term to write in an `oslc.where` clause. */
+  term: string;
+  /** The resource the value identifies. */
+  uri: string;
+  /** A value carried by that resource and no other. */
+  value: string;
+}
+
+/** Predicates a filter can be built on, in the order they are tried. */
+const FILTERABLE: Array<{ predicate: string; term: string }> = [
+  { predicate: 'http://purl.org/dc/terms/identifier', term: 'dcterms:identifier' },
+  { predicate: 'http://purl.org/dc/terms/title', term: 'dcterms:title' },
+];
+
+/**
+ * A predicate and value that identify exactly one resource, for filter cases to
+ * build a clause on.
+ *
+ * `dcterms:identifier` first, then `dcterms:title`. The fallback matters more
+ * than it sounds: against ELM, "no value of dcterms:identifier identifies exactly
+ * one resource" was the reason behind nearly every `inconclusive` verdict — the
+ * identity, negation, construct and prefix cases all rest on this, and all of
+ * them went unmeasured on servers that simply do not populate an identifier the
+ * way the probe assumed. A title distinguishes just as well for the purpose: the
+ * case only needs *some* value only one resource carries.
+ *
+ * A value containing a double quote is skipped rather than escaped. The clause
+ * grammar here is assembled as text, and a title is free-form user content — the
+ * one place where a value can end the literal early and change the meaning of the
+ * query being measured.
+ */
+export function distinguishingProperty(truth: GroundTruth): Distinguishing | null {
+  return distinguishingCandidates(truth)[0] ?? null;
+}
+
+/**
+ * Every value that looks distinguishing, best predicate first.
+ *
+ * Plural because "unique in the sample" is not "unique in the collection": ground
+ * truth samples five members, and DOORS Next holds 582 artifacts sharing template
+ * titles like "Module Content Only". A filter built on such a value returns three
+ * resources, and the case then reports `unsupported` for a filter that worked
+ * perfectly. The caller confirms a candidate with a query before building on it,
+ * and moves to the next when it turns out not to be unique.
+ */
+export function distinguishingCandidates(truth: GroundTruth): Distinguishing[] {
+  const candidates: Distinguishing[] = [];
+  for (const { predicate, term } of FILTERABLE) {
+    const counts = new Map<string, string[]>();
+    for (const resource of truth.resources) {
+      for (const value of valuesOf(resource, predicate)) {
+        counts.set(value, [...(counts.get(value) ?? []), resource.uri]);
+      }
+    }
+    for (const [value, uris] of counts) {
+      if (uris.length === 1 && !value.includes('"')) {
+        candidates.push({ predicate, term, uri: uris[0], value });
+      }
+    }
+  }
+  return candidates;
+}
+
+/** The predicates {@link distinguishingProperty} tries, for an inconclusive reason. */
+export function filterablePredicates(): string[] {
+  return FILTERABLE.map((f) => f.predicate);
+}
+
 export function canOrderBy(truth: GroundTruth, predicate: string): Adequacy {
   const values = truth.resources.flatMap((r) => valuesOf(r, predicate));
   if (values.length < 2) {

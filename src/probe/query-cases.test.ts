@@ -50,7 +50,14 @@ function scriptedHttp(bodies: string[]) {
 }
 
 function ctx(http: any, truth: GroundTruth): CaseContext {
-  return { http, queryBase: QUERY_BASE, truth, usePost: true };
+  // `known` is resolved by the orchestrator and confirmed by query before the
+  // filter cases run; supplied here so a case can be exercised on its own.
+  return {
+    http, queryBase: QUERY_BASE, truth, usePost: true,
+    known: truth.resources.length > 0
+      ? { predicate: IDENT, term: 'dcterms:identifier', uri: R(1), value: 'PROBE-01' }
+      : undefined,
+  };
 }
 
 describe('WHERE_CONSTRUCTS', () => {
