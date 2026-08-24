@@ -82,9 +82,17 @@ Measured on one deployment, with an `oslc.where` chosen to match **nothing**:
 
 | Application | Query capabilities advertised | Unfiltered query | `oslc.where` that matches nothing |
 |---|---|---|---|
-| EWM | 2 | Returns work items | `400` — `oslc:Error … "Cannot reconstruct value"` |
-| DOORS Next | 8 | Returns members | `200`, **and the same members as unfiltered** |
-| ETM | **15** (was 0 — see below) | not re-probed | not re-probed |
+| EWM | 3 | Returns work items | `400` — `oslc:Error … "Cannot reconstruct value"` |
+| DOORS Next | 8, of which **1** queries RM resources (quirk 15) | 582 members | `200`, and the filter *is* applied once prefixes are declared |
+| ETM | **15** | 30 test cases on the TestCase base | `200`, filter applied |
+
+Re-measured 2026-08-24 with the probe's own defects corrected — undeclared prefixes (quirk 15), an
+empty POST body (quirk 16), a `rdfs:member`-only reading of results (quirk 13), and a distinguishing
+value trusted from a five-member sample. Each of those produced a *false* negative, and between them
+they accounted for most of what an earlier run reported as missing query support. **Where a probe and
+a server disagree, suspect the probe first.** All three applications support `oslc.where` on
+`dcterms:identifier` and `dcterms:title`, `oslc.select`, and paging; none supports `oslc.searchTerms`;
+`oslc.orderBy` is honoured by DOORS Next and **ignored** by EWM and ETM.
 
 > **Read these as observations, not as established product behaviour.** They were taken against **configuration-enabled** project areas, on a deployment whose configuration management was known to be misbehaving at the time, and **without supplying a `Configuration-Context`**. The requests also declared no **`oslc.prefix`** for the prefixes used in the filter. DOORS Next is expected to support `oslc.where`, so the most likely explanations are the missing configuration context or the undeclared prefix rather than the product. **The cause is not established.** This section will be revised once the same probes run against non-configuration-enabled project areas with prefixes declared.
 
@@ -124,6 +132,14 @@ One OSLC server encountered serves `rootservices` as SPARQL-style Turtle (`PREFI
 Falling back to the `${baseUrl}/oslc/catalog` convention when no catalog predicate is found handles this gracefully.
 
 This is a generic-framework error in how it produces the Turtle representation of its rootservices document. For ELM applications, it's best to use Accept=application/rdf+xml, many do not support Turtle at all. 
+
+### 9. No per-type `query_<type>` tools are generated for any application
+
+Discovery finds query capabilities — 8 in DOORS Next, 2 in EWM — but tool generation produces only `create_*` tools from creation factories. Querying is therefore possible only through the generic `query_resources` tool, which requires the caller to supply a `queryBase` URI it has no way to discover from the tool schema alone.
+
+Generated tool names also derive from factory *titles* rather than resource types, which produces names like `create_location_for_creation_of_defect_change_requests_` — hard for a language model to select correctly.
+
+---
 
 ### 10. EWM types a change request with `dcterms:type`, not `rdf:type`
 
@@ -195,13 +211,195 @@ factory URL carries the subtype.
 `probe_oslc` now reads required properties from the shape, supplies a required reference from its
 first allowed value, and carries the server's `oslc:message` into its report.
 
-### 9. No per-type `query_<type>` tools are generated for any application
+### 13. ETM links query results by a per-type domain predicate, and declares none of them
 
-Discovery finds query capabilities — 8 in DOORS Next, 2 in EWM — but tool generation produces only `create_*` tools from creation factories. Querying is therefore possible only through the generic `query_resources` tool, which requires the caller to supply a `queryBase` URI it has no way to discover from the tool schema alone.
+Observed 2026-08-24 against ETM at `trs-filter.smartfacts.com/qm`, project area
+`JKE Banking (Quality Management)`.
 
-Generated tool names also derive from factory *titles* rather than resource types, which produces names like `create_location_for_creation_of_defect_change_requests_` — hard for a language model to select correctly.
+A Test Case query answers `200` with a 204 KB document, `oslc:totalCount 30`, and thirty results —
+and **no `rdfs:member` and no `ldp:contains` anywhere in it**. Each result is linked from the query
+base by `oslc_qm:testCase` (`http://open-services.net/ns/qm#testCase`). EWM's work-item query, on
+the same deployment, uses `rdfs:member` for its 95 results. So the membership predicate varies by
+application, and a client that reads only the standard ones reports a populated project area as
+empty.
 
----
+The `oslc:ResponseInfo` node is also published under a **paged URI of its own** —
+`…/VersionedTestCase?rqm_qm.pageNum=0` — not the query base, so `oslc:totalCount` and the paging
+links hang off a different subject than the members do.
+
+**A different predicate per capability.** Each of the fifteen query capabilities links its results
+with the predicate for its own type. Measured across the project area:
+
+| Capability | Members | Container predicate |
+|---|---|---|
+| TestCase | 30 | `oslc_qm:testCase` |
+| TestScriptStep | 71 | `oslc_qm:testScriptStep` |
+| TestExecutionRecord | 52 | `oslc_qm:testExecutionRecord` |
+| TestResult | 52 | `oslc_qm:testResult` |
+| TestScript | 27 | `oslc_qm:testScript` |
+| TestPhase | 16 | `oslc_qm:testPhase` |
+| TestEnvironment | 14 | `oslc_qm:testEnvironment` |
+| TestPlan | 4 | `oslc_qm:testPlan` |
+| TestSuite | 3 | `oslc_qm:testSuite` |
+| Keyword | 2 | `oslc_qm:keyword` |
+| BuildRecord, TestData, TestSuiteResult, BuildDefinition, TestSuiteExecutionRecord | 0 | — (empty) |
+
+271 resources, all of which a `rdfs:member`-only client reads as zero. Ten distinct predicates, so an
+allow-list needs one entry per OSLC QM type and a new type breaks it again.
+
+**Where this sits against the specification — no normative statement is broken.**
+[OSLC Query 3.0][query30] binds membership in two branches, and ETM satisfies the precondition of
+neither:
+
+> **QUERY-13** — If the query capability that declared the base URI does **not** declare a
+> `oslc:resourceShape` then the container MUST include an `rdfs:member` reference to each of the
+> result members.
+>
+> **QUERY-14** — If the query capability … declares a `oslc:resourceShape` **and that resource shape
+> defines a container property with `oslc:isMemberProperty "true"^^xsd:boolean`** then the query result
+> container MUST include the specified member property…
+
+- All **15 of 15** capabilities declare `oslc:resourceShape`, so QUERY-13's condition is false.
+- The declared shape defines **no** property with `oslc:isMemberProperty "true"` — it declares
+  `oslc:isMemberProperty` on **117 properties, every one `false`** — and has no property for
+  `oslc_qm:testCase` at all. So QUERY-14's condition is false too.
+
+Neither MUST applies. **ETM is not provably non-conformant here**; it occupies a gap between the two
+clauses. `QUERY-12` ("the container SHOULD be a Linked Data Platform Container") is unmet — no `ldp:`
+terms, no container type, no `Link` header — but that is a SHOULD.
+
+What is genuinely wrong is subtler than a violation: `oslc:isMemberProperty` exists precisely so a
+client can *learn* the membership predicate, ETM ships that vocabulary on 117 properties set to
+`false`, and never sets it `true` on the property that is one. The mechanism is implemented and
+unused, and the real predicate appears nowhere in the shape. A client following QUERY-13/14 to the
+letter finds no declaration and no `rdfs:member`, and has nothing left to go on.
+
+In fairness: ETM is a 2.0-era implementation — it requires `OSLC-Core-Version: 2.0` and its own
+namespaces are `open-services.net/xmlns/qm/1.0/`. Query 3.0 postdates it, and [QM 2.0][qm20] says
+nothing about membership predicates, delegating to Core; its only normative statement on query
+responses concerns representations ("QM Providers MUST provide RDF/XML, XML, and Atom Syndication
+Format XML"). Raise this as a discoverability gap, not as a conformance defect.
+
+**A rule to hold our own servers to:** a reflective owned domain that emits a domain membership
+predicate must declare it — `oslc:isMemberProperty "true"` on a property of the query capability's
+declared `oslc:resourceShape` — or clients are left in the same gap.
+
+**Consequence for a client.** Membership cannot be assumed from a predicate list, and cannot be
+discovered from the shape either. Take it structurally: whatever
+the container — the query base, or an `oslc:ResponseInfo` node — points at, minus the predicates that
+describe the container itself (`rdf:type`, `oslc:totalCount`, `oslc:nextPage`, `oslc:serviceProvider`,
+`oslc:instanceShape`, `dcterms:title`, …). A short exclusion list beats a membership allow-list,
+because a domain predicate nobody anticipated still counts.
+
+This was diagnosed from a probe report that read *"0 member(s) returned with no parameters"* for all
+fifteen ETM query capabilities, which then made every filter case `inconclusive` for want of a
+baseline. The project area was never empty. `probe_oslc` now reads membership structurally.
+
+The MCP `query_resources` tool is unaffected: it returns the response document as it came, so a
+client sees all thirty results whatever predicate links them.
+
+### 14. ETM refuses a query with trailing whitespace, and says nothing useful about why
+
+Observed 2026-08-24 against ETM at `trs-filter.smartfacts.com/qm`, project area
+`JKE Banking (Quality Management)`.
+
+A clause with one trailing space is rejected outright:
+
+| Request | Result |
+|---|---|
+| `?oslc.where=dcterms:title="Verify dividend transfer frequency"` | **200**, 1 member |
+| `?oslc.where=dcterms:title="Verify dividend transfer frequency" ` (trailing space, sent as `%20`) | **400** `AQXCM5002E` |
+
+This is stricter than the OSLC query grammar requires, and it is the kind of input a client produces
+by accident: a filter concatenated from parts, read from a configuration file or a text box, or
+emitted by a model that ends a clause with a space. A **browser hides it** — pasting into the address
+bar trims trailing whitespace — so the same URL "works in the browser and fails in Postman", which
+sends the URL byte for byte.
+
+**The error is no help.** `AQXCM5002E The query was not run for this query URL: <url>` gives no
+position, no offending token, and no distinction between causes. The identical code and wording
+answers a whitespace problem *and* a missing-filter one:
+
+- `…/com.ibm.rqm.planning.TestCase` with **no** `oslc.where` → **400 `AQXCM5002E`**. That base
+  requires a filter.
+- `…/com.ibm.rqm.planning.VersionedTestCase` with no filter → **200**, all 30 members.
+
+So two query bases for the same concept differ in whether an unfiltered query is legal, and the error
+that tells you so is the same one you get for a stray space. Diagnose by comparing against a
+known-good request rather than by reading the message.
+
+**For a client:** trim a filter before sending it, and treat `AQXCM5002E` as "compare with something
+that works", not as "the filter is wrong".
+
+### 15. DOORS Next predefines no prefixes — a query must declare every one it uses
+
+Observed 2026-08-24 against DOORS Next at `trs-filter.smartfacts.com/rm`, project area
+`__NJbYJvgEfG3vp8mqSmZVg`.
+
+`oslc.select=dcterms:title` on the requirement query base answers:
+
+```
+400 Bad Request
+err:detailedMessage  Error when converting: oslc.query=true&oslc.select=dcterms:title
+                     java.lang.RuntimeException: Undefined namespace prefix: dcterms
+```
+
+Not even `dcterms` is predefined. Declare the prefixes and everything works — measured on the same
+base:
+
+| Query | Result |
+|---|---|
+| bare | **582** members |
+| `oslc.prefix=dcterms=<…>&oslc.select=dcterms:title` | **582** |
+| `…&oslc.where=rdf:type=<oslc_rm:Requirement>` | **570** |
+| `…&oslc.where=rdf:type=<oslc_rm:RequirementCollection>` | **12** |
+| `oslc.pageSize=3` | 3, titles returned |
+
+570 + 12 = 582, so the type filter is genuinely applied rather than accepted and ignored.
+
+**Only one of its eight query capabilities is OSLC RM domain data.** The other seven query DOORS
+Next's own metadata and several answer `403`:
+
+| Capability | `oslc:resourceType` | |
+|---|---|---|
+| Query Capability | `Requirement`, `RequirementCollection` | the domain query — 582 artifacts |
+| View, ReqIFDefinition, AttributeDefinition, AttributeType, LinkType, folder, ArtifactType | DNG-internal | administration/metadata, not RM resources |
+
+So a `403` from most DOORS Next query capabilities is not a query defect — those capabilities are not
+querying requirements at all. Note also that **no** DNG capability declares an `oslc:resourceShape`,
+so unlike ETM (quirk 13) `QUERY-13` applies and `rdfs:member` is required — DNG uses it, and is
+conformant on the point ETM sits in a gap on.
+
+**For a client:** never assume a prefix is predefined. Declare every prefix a clause uses, on every
+request. `probe_oslc` now does: prefix discovery runs first and undeclared, and where the server
+predefines nothing the remaining cases declare prefixes explicitly. Before that, DOORS Next recorded
+`select: NO` and `where: NO` for a missing declaration rather than for missing support — the probe had
+already discovered the fact and then failed to act on it.
+
+### 16. POST-query support varies by application, and an empty POST body proves nothing
+
+Measured 2026-08-24 across the three applications of one deployment, sending `oslc.pageSize=1` by
+both methods:
+
+| Application | POST-form query | |
+|---|---|---|
+| **ETM** (`/qm`) | **accepted** | 200, results returned |
+| **DOORS Next** (`/rm`) | **accepted** | 200, results returned |
+| **EWM** (`/ccm`) | **refused** | 415 — `Content type 'application/x-www-form-urlencoded' is not supported.` on every body tried |
+
+So POST-query cannot be assumed from the product, only from the application. On EWM, `oslc.where` and
+`oslc.select` are bounded by URL length; on ETM and DOORS Next they are not.
+
+**The measurement trap, which cost us a wrong answer for two of the three.** An empty form body is
+not an OSLC query. ETM answers **415** to `POST` with no parameters and **200** to the same POST
+carrying `oslc.where`/`oslc.select`; DOORS Next answers **403** to the empty one and **200** to a real
+one. A method comparison that posts an empty body therefore reports POST-query as unsupported on
+servers that support it — and worse, a client that then falls back to GET tells its user that queries
+are capped by URL length when they are not.
+
+The converse also matters: an **unparameterised** query must go as GET even where POST works. There
+is nothing to put in the body, and the servers refuse an empty one — so requesting the unfiltered
+baseline by POST because POST is supported returns 415 and an empty baseline.
 
 ## Still unknown
 
@@ -210,6 +408,22 @@ Generated tool names also derive from factory *titles* rather than resource type
 - **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
 - **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
 - ~~**Whether creation factories enforce their advertised shapes**~~ — **answered: yes, and more strictly than the shape reads.** EWM enforces exactly what its shape declares required (`title`, `filedAgainst`), and additionally rejects one of that property's own advertised allowed values (`Unassigned`). See quirk 12. Which properties are genuinely *writable* remains open.
+
+---
+
+## Specifications cited
+
+- **OSLC Query 3.0** — [docs.oasis-open-projects.org/oslc-op/query/v3.0/os/oslc-query.html][query30].
+  `QUERY-12` (container SHOULD be an LDPC), `QUERY-13` (`rdfs:member` required absent a declared
+  query shape), `QUERY-14` (a declared `oslc:isMemberProperty` may replace it) — quirk 13.
+- **OSLC Quality Management 2.0** — [archive.open-services.net/bin/view/Main/QmSpecificationV2][qm20].
+  Silent on membership predicates; normative only on representations — quirk 13.
+- **OSLC Core 2.0 / 3.0** — `dcterms:identifier` and the other server-assigned properties are
+  read-only and provider-assigned, which is why a client-supplied identifier is correctly discarded
+  (quirk 12), and why Turtle is optional where RDF/XML is not.
+
+[query30]: https://docs.oasis-open-projects.org/oslc-op/query/v3.0/os/oslc-query.html
+[qm20]: https://archive.open-services.net/bin/view/Main/QmSpecificationV2.html
 
 ---
 

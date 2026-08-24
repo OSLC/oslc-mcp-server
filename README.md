@@ -225,7 +225,7 @@ returned. No request declares `oslc.prefix`: the run is measuring which prefixes
 | Case | Request | `supported` means | Other verdicts |
 |---|---|---|---|
 | `bare-query` | `GET Q` | members came back with no parameters | `unsupported`: 4xx, or zero members. The specification does not say what a bare query returns, so this is not a defect |
-| `post-versus-get` | `POST Q` (form) and `GET Q`, both empty | both accepted | `unsupported`: only GET works — **your EWM case**. Queries are then capped by URL length, which bites on long `oslc.where`/`oslc.select` |
+| `post-versus-get` | `POST Q` (form) and `GET Q`, both carrying `oslc.pageSize=1` | both accepted | `unsupported`: only GET works, so queries are capped by URL length — which bites on a long `oslc.where`/`oslc.select`. **The request must carry a real query**: an empty form body is not an OSLC query, and a server answering 415 to one says nothing about POST-query support |
 | `where-identity` | `oslc.where=dcterms:identifier="R-7"` | exactly the known resource came back, **by identity** | `ignored`: the whole baseline came back, so the filter did nothing. `unsupported`: 4xx, zero, or the wrong resources |
 | `where:equality` | `dcterms:identifier="R-7"` | as above | as above |
 | `where:inequality` | `dcterms:identifier!="R-7"` | *see the limitation below* | |
