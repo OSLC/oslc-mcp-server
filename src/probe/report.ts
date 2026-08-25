@@ -118,6 +118,30 @@ export function formatProbeReport(
   lines.push('## Query cases', '', ...table(run.cases), '');
 
   const withTranscripts = run.cases.filter((c) => c.transcripts.length > 0);
+  // Refusals first, before the transcripts: an unassigned licence or a missing
+  // permission is not a finding about the server's OSLC support, and reading
+  // the case table without knowing one occurred gives entirely the wrong
+  // impression of the deployment.
+  if (run.refusals && run.refusals.length > 0) {
+    lines.push('## Refusals — administrative, not capability', '');
+    lines.push(
+      'These are not findings about OSLC support. Each is an account or request problem, and the',
+      'run below should be read as provisional until they are resolved and it is repeated.',
+      ''
+    );
+    lines.push('| Operation | Status | Cause | What the server said |');
+    lines.push('|---|---|---|---|');
+    for (const r of run.refusals) {
+      const said = (r.message ?? '').replace(/\|/g, '\\|').slice(0, 160);
+      lines.push(`| ${r.operation} | ${r.status} | **${r.kind}** | ${said || '_(no message)_'} |`);
+    }
+    lines.push('');
+    for (const r of run.refusals) {
+      if (r.advice) lines.push(`- **${r.kind}** — ${r.advice}`);
+    }
+    lines.push('');
+  }
+
   lines.push('## Transcripts', '');
   if (withTranscripts.length === 0) {
     lines.push('_No requests were recorded._', '');

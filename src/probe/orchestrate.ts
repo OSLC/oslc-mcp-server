@@ -10,6 +10,7 @@ import {
 } from './fixture.js';
 import { sampleGroundTruth, type GroundTruth, type KnownResource } from './ground-truth.js';
 import { memberURIs, type CaseResult } from './verdicts.js';
+import { classifyRefusal, refusalAdvice, type Refusal } from './refusal.js';
 import {
   caseBareGet,
   caseNegationPair,
@@ -56,24 +57,70 @@ export interface ProbeRun {
   needingCleanup: string[];
   /** `null` when it was never established, because nothing was created. */
   deleteSupported: boolean | null;
+  /**
+   * Why a refusal happened, where one did. Reported so the caller is sent to
+   * the right place: a licence and a permission are different administrative
+   * queues, a CSRF failure is the client's, and only an unclassified refusal is
+   * evidence that an operation is genuinely unsupported.
+   */
+  refusals?: Array<{ operation: string; status: number; kind: Refusal['kind']; message: string | null; advice: string | null }>;
+}
+
+/**
+ * Fetch allowed values a shape referenced rather than inlined.
+ *
+ * `oslc:allowedValues` may point at a **separate document**, and EWM's does:
+ * the Defect shape carries `oslc:allowedValues rdf:resource="…/property/category/allowedValues"`
+ * and not one `oslc:allowedValue` for it. A client that reads only the shape
+ * document sees an empty list for a property that is `Exactly-one`, skips it,
+ * and gets a 403 precondition it has no way to explain.
+ *
+ * Failure is not fatal: an empty list leaves the property unset, which is the
+ * behaviour before this existed.
+ */
+async function dereferenceAllowedValues(http: ProbeHttp, documentURI: string): Promise<string[]> {
+  try {
+    const body = await bodyOf(http, documentURI);
+    return [...body.matchAll(/<oslc:allowedValue rdf:resource="([^"]+)"/g)].map((m) => m[1]);
+  } catch {
+    return [];
+  }
 }
 
 const DCTERMS_IDENTIFIER = 'http://purl.org/dc/terms/identifier';
 const DCTERMS_TITLE = 'http://purl.org/dc/terms/title';
 
 /** Create one resource, returning its URI when the server said where it put it. */
+/**
+ * Headers every mutating request carries.
+ *
+ * `X-Jazz-CSRF-Prevent` is required by some Jazz operations and not others —
+ * measured, EWM accepted a `POST` to a creation factory without it and refused
+ * the `DELETE` of the resource it had just created. So it is sent on every
+ * mutation rather than inferred from a successful one. Its value is the current
+ * `JSESSIONID`; it is a credential, and `redactHeaders` keeps it out of
+ * transcripts.
+ */
+function mutationHeaders(base: Record<string, string>, csrfToken?: string): Record<string, string> {
+  return csrfToken ? { ...base, 'X-Jazz-CSRF-Prevent': csrfToken } : base;
+}
+
 async function create(
   http: ProbeHttp,
   creationURI: string,
-  body: string
-): Promise<{ ok: boolean; uri: string | null; status: number; message: string | null }> {
+  body: string,
+  csrfToken?: string
+): Promise<{ ok: boolean; uri: string | null; status: number; refusal: Refusal }> {
   const response = await http.request({
     method: 'POST',
     url: creationURI,
     // RDF/XML both ways: it is the representation OSLC Core requires every
     // server to support, so a refusal is a finding rather than an artefact of
     // having asked in an optional format.
-    headers: { 'Content-Type': 'application/rdf+xml', 'OSLC-Core-Version': '2.0', 'Accept': 'application/rdf+xml' },
+    headers: mutationHeaders(
+      { 'Content-Type': 'application/rdf+xml', 'OSLC-Core-Version': '2.0', 'Accept': 'application/rdf+xml' },
+      csrfToken
+    ),
     data: body,
     validateStatus: () => true,
     responseType: 'text',
@@ -84,20 +131,26 @@ async function create(
     ok: response.status < 400,
     uri: location,
     status: response.status,
-    message: oslcMessage(response.data),
+    refusal: classifyRefusal(response.data),
   };
 }
 
-async function remove(http: ProbeHttp, uri: string): Promise<boolean> {
+async function remove(
+  http: ProbeHttp,
+  uri: string,
+  csrfToken?: string
+): Promise<{ ok: boolean; status: number; refusal: Refusal }> {
   const response = await http.request({
     method: 'DELETE',
     url: uri,
-    headers: { 'OSLC-Core-Version': '2.0' },
+    headers: mutationHeaders({ 'OSLC-Core-Version': '2.0', 'Accept': 'application/rdf+xml' }, csrfToken),
     validateStatus: () => true,
     responseType: 'text',
     transformResponse: [(b: unknown) => b],
   });
-  return response.status < 400;
+  // Any 2xx is success: measured, EWM answers 204 and DOORS Next and ETM answer
+  // 200 to the same verb.
+  return { ok: response.status < 400, status: response.status, refusal: classifyRefusal(response.data) };
 }
 
 /** Literal values of a predicate, read out of an RDF/XML body without a full parse. */
@@ -233,11 +286,27 @@ export async function runProbe(args: {
   queryBase: string;
   onDeleteUnsupported: 'stop' | 'proceed' | 'read-only';
   manifestWrite: (line: string) => void;
+  /**
+   * Current `JSESSIONID`, sent as `X-Jazz-CSRF-Prevent` on every mutation.
+   * Without it, Jazz servers refuse some mutations with a `403` that reads as a
+   * permission problem — and a probe would record "delete unsupported" for a
+   * server that supports it perfectly well.
+   */
+  csrfToken?: string;
 }): Promise<ProbeRun> {
-  const { http, sp, queryBase, onDeleteUnsupported, manifestWrite } = args;
+  const { http, sp, queryBase, onDeleteUnsupported, manifestWrite, csrfToken } = args;
   const manifest = createManifest(manifestWrite);
   const serviceProvidersWritten: string[] = [];
   const needingCleanup: string[] = [];
+  const refusals: ProbeRun['refusals'] = [];
+
+  const note = (operation: string, status: number, refusal: Refusal): void => {
+    if (refusal.kind === 'unclassified' && !refusal.message) return;
+    refusals.push({
+      operation, status, kind: refusal.kind,
+      message: refusal.message, advice: refusalAdvice(refusal.kind),
+    });
+  };
 
   const readOnly = async (modeReason: string, deleteSupported: boolean | null): Promise<ProbeRun> => {
     // Phases 4 and 7 only, with ground truth sampled from what is already there.
@@ -245,7 +314,7 @@ export async function runProbe(args: {
     const baseline = memberURIs(await bodyOf(http, queryBase), queryBase);
     const truth = await sampleGroundTruth(http, baseline);
     const cases = [methodCase, ...(await runCases({ http, queryBase, truth, usePost }))];
-    return { mode: 'read-only', modeReason, serviceProvidersWritten, cases, needingCleanup, deleteSupported };
+    return { mode: 'read-only', modeReason, serviceProvidersWritten, cases, needingCleanup, deleteSupported, refusals };
   };
 
   // ── Phase 1: can this server be written to, and can what it writes be removed? ──
@@ -258,11 +327,15 @@ export async function runProbe(args: {
   const probeSpec = specs[0];
   manifest.record('probe-artifact (pending)');
   const probe = await create(http, factory.creationURI,
-    fixtureRdfXml(probeSpec, factory.resourceType, requiredExtras(factory.shape, probeSpec.title)));
+    fixtureRdfXml(probeSpec, factory.resourceType,
+      await requiredExtras(factory.shape, probeSpec.title, (uri) => dereferenceAllowedValues(http, uri))),
+    csrfToken);
   if (!probe.ok) {
+    note('create', probe.status, probe.refusal);
     return readOnly(
       `the creation factory refused a create with ${probe.status}` +
-      (probe.message ? ` — ${probe.message}` : ''),
+      (probe.refusal.message ? ` — ${probe.refusal.message}` : '') +
+      (refusalAdvice(probe.refusal.kind) ? ` [${probe.refusal.kind}] ${refusalAdvice(probe.refusal.kind)}` : ''),
       null
     );
   }
@@ -280,8 +353,15 @@ export async function runProbe(args: {
     );
   }
 
-  const deleteSupported: boolean | null = await remove(http, probe.uri);
-  if (!deleteSupported) needingCleanup.push(probe.uri);
+  const removal = await remove(http, probe.uri, csrfToken);
+  const deleteSupported: boolean | null = removal.ok;
+  if (!removal.ok) {
+    needingCleanup.push(probe.uri);
+    // Why delete failed decides what the caller should do: a permission is an
+    // administrator's to grant, a CSRF failure is ours, and only an
+    // unclassified refusal is evidence that delete is genuinely unsupported.
+    note('delete', removal.status, removal.refusal);
+  }
 
   if (deleteSupported === false) {
     if (onDeleteUnsupported === 'stop') {
@@ -302,7 +382,7 @@ export async function runProbe(args: {
   for (const spec of specs) {
     manifest.record(`${spec.identifier} (pending)`);
     const made = await create(http, factory.creationURI,
-      fixtureRdfXml(spec, factory.resourceType, requiredExtras(factory.shape, spec.title)));
+      fixtureRdfXml(spec, factory.resourceType, await requiredExtras(factory.shape, spec.title, (uri) => dereferenceAllowedValues(http, uri))));
     if (made.ok && made.uri) {
       manifest.record(made.uri);
       created.push({ uri: made.uri, spec });
@@ -341,7 +421,11 @@ export async function runProbe(args: {
 
   // ── Phases 6 and 7: remove the fixture, then confirm removal is visible ──
   for (const { uri } of created) {
-    if (!(await remove(http, uri))) needingCleanup.push(uri);
+    const removal = await remove(http, uri, csrfToken);
+    if (!removal.ok) {
+      needingCleanup.push(uri);
+      note('cleanup', removal.status, removal.refusal);
+    }
   }
 
   return {
@@ -352,6 +436,7 @@ export async function runProbe(args: {
     fixtureVisibleToQuery,
     needingCleanup,
     deleteSupported,
+    refusals,
   };
 }
 

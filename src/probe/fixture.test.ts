@@ -168,8 +168,8 @@ describe('required properties are read from the shape', () => {
     expect(chosen?.title).toBe('Task');
   });
 
-  it('supplies a required reference from its first allowed value', () => {
-    const extras = requiredExtras({ properties: [TITLE, FILED] }, 'PROBE-01');
+  it('supplies a required reference from its first allowed value', async () => {
+    const extras = await requiredExtras({ properties: [TITLE, FILED] }, 'PROBE-01');
     expect(extras).toEqual([{
       predicate: 'http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/filedAgainst',
       value: 'https://elm.example.com/cat/JKE',
@@ -177,19 +177,19 @@ describe('required properties are read from the shape', () => {
     }]);
   });
 
-  it('does not repeat a property the fixture already sends', () => {
-    expect(requiredExtras({ properties: [TITLE] }, 'PROBE-01')).toEqual([]);
+  it('does not repeat a property the fixture already sends', async () => {
+    expect(await requiredExtras({ properties: [TITLE] }, 'PROBE-01')).toEqual([]);
   });
 
-  it('will not invent a URI for a required reference with no allowed values', () => {
+  it('will not invent a URI for a required reference with no allowed values', async () => {
     // Any URI would be a fabricated link. Better to let the create fail with the
     // server's own message, which names what is missing.
-    const extras = requiredExtras({ properties: [{ ...FILED, allowedValues: [] }] }, 'PROBE-01');
+    const extras = await requiredExtras({ properties: [{ ...FILED, allowedValues: [] }] }, 'PROBE-01');
     expect(extras).toEqual([]);
   });
 
-  it('gives a required literal the PROBE- marker, so residue stays identifiable', () => {
-    const extras = requiredExtras({ properties: [
+  it('gives a required literal the PROBE- marker, so residue stays identifiable', async () => {
+    const extras = await requiredExtras({ properties: [
       { name: 'summary', propertyDefinition: 'http://example.org/summary', occurs: 'exactly-one' },
     ] }, 'PROBE-01');
     expect(extras).toEqual([{ predicate: 'http://example.org/summary', value: 'PROBE-01', isReference: false }]);
@@ -236,22 +236,22 @@ describe('required properties via the graph, not the flattened array', () => {
     return parseShape(store, SHAPE_URI);
   };
 
-  it('reads Exactly-one from the OSLC URI the server published', () => {
-    expect(requiredExtras(parsed(), 'PROBE-01')).toHaveLength(1);
+  it('reads Exactly-one from the OSLC URI the server published', async () => {
+    expect(await requiredExtras(parsed(), 'PROBE-01')).toHaveLength(1);
   });
 
-  it('avoids the shape’s advertised default when another value exists', () => {
+  it('avoids the shape’s advertised default when another value exists', async () => {
     // EWM advertises `Unassigned` as filedAgainst's default and rejects it on
     // save. A required property whose default the server would accept need not
     // have been required at all.
-    expect(requiredExtras(parsed(), 'PROBE-01')[0]).toEqual({
+    expect((await requiredExtras(parsed(), 'PROBE-01'))[0]).toEqual({
       predicate: FILED,
       value: 'https://elm.example.com/cat/JKE',
       isReference: true,
     });
   });
 
-  it('falls back to the default when it is the only allowed value', () => {
+  it('falls back to the default when it is the only allowed value', async () => {
     const shape = parsed();
     shape.access = undefined;   // a hand-built shape: no store behind it
     (shape.properties as any) = [{
@@ -259,6 +259,59 @@ describe('required properties via the graph, not the flattened array', () => {
       valueType: 'http://open-services.net/ns/core#Resource',
       allowedValues: [DEFAULT_CAT], defaultValue: DEFAULT_CAT,
     }];
-    expect(requiredExtras(shape, 'PROBE-01')[0].value).toBe(DEFAULT_CAT);
+    expect((await requiredExtras(shape, 'PROBE-01'))[0].value).toBe(DEFAULT_CAT);
+  });
+});
+
+describe('allowed values referenced rather than inlined', () => {
+  const FILED = 'http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/filedAgainst';
+  const REF = 'https://elm.example.com/ccm/shapes/defect/property/category/allowedValues';
+
+  /** A shape whose required reference names its values in another document. */
+  const shape = {
+    properties: [{
+      propertyDefinition: FILED,
+      occurs: 'http://open-services.net/ns/core#Exactly-one',
+      valueType: 'http://open-services.net/ns/core#Resource',
+      allowedValues: [],
+      allowedValuesRef: REF,
+      defaultValue: 'https://elm.example.com/cat/Unassigned',
+    }],
+  };
+
+  it('fetches the referenced document and uses a value from it', async () => {
+    // EWM's Defect shape references its categories instead of inlining them, so
+    // allowedValues is empty for a property that is Exactly-one. Skipping it
+    // produces a 403 the client cannot explain.
+    const extras = await requiredExtras(shape, 'PROBE-01', async (uri) => {
+      expect(uri).toBe(REF);
+      return ['https://elm.example.com/cat/Unassigned', 'https://elm.example.com/cat/JKE'];
+    });
+    expect(extras).toEqual([
+      { predicate: FILED, value: 'https://elm.example.com/cat/JKE', isReference: true },
+    ]);
+  });
+
+  it('still avoids the advertised default among the fetched values', async () => {
+    // Unassigned is EWM's default and is rejected on save with the same 403 as
+    // sending nothing — an allowed value that is not allowed.
+    const extras = await requiredExtras(shape, 'PROBE-01', async () => [
+      'https://elm.example.com/cat/Unassigned',
+      'https://elm.example.com/cat/JKE',
+    ]);
+    expect(extras[0].value).not.toContain('Unassigned');
+  });
+
+  it('skips the property when the reference cannot be fetched', async () => {
+    // No worse than before this existed: the create is refused and the server's
+    // own message names what is missing.
+    expect(await requiredExtras(shape, 'PROBE-01', async () => [])).toEqual([]);
+  });
+
+  it('does not fetch when the values are already inline', async () => {
+    const inline = { properties: [{ ...shape.properties[0], allowedValues: ['https://elm.example.com/cat/JKE'], allowedValuesRef: null }] };
+    let fetched = false;
+    await requiredExtras(inline, 'PROBE-01', async () => { fetched = true; return []; });
+    expect(fetched).toBe(false);
   });
 });

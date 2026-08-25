@@ -11,6 +11,8 @@ export const FIXTURE_PREFIX = 'PROBE-';
 interface RequiredProperty {
   propertyDefinition: string | null;
   allowedValues: string[];
+  /** Where the allowed values live, when the shape referenced rather than inlined them. */
+  allowedValuesRef: string | null;
   defaultValue: string | null;
   isReference: boolean;
 }
@@ -32,6 +34,7 @@ function requiredProperties(shape: unknown): RequiredProperty[] {
     return access.required.map((p: ShapePropertyAccess) => ({
       propertyDefinition: p.propertyDefinition,
       allowedValues: p.allowedValues,
+      allowedValuesRef: p.allowedValuesRef,
       defaultValue: p.defaultValue,
       isReference: p.isReference,
     }));
@@ -47,6 +50,7 @@ function requiredProperties(shape: unknown): RequiredProperty[] {
     .map((p) => ({
       propertyDefinition: (p.propertyDefinition ?? p.predicateURI ?? null) as string | null,
       allowedValues: (p.allowedValues ?? []) as string[],
+      allowedValuesRef: (p.allowedValuesRef ?? null) as string | null,
       defaultValue: (p.defaultValue ?? null) as string | null,
       isReference: REFERENCE_TYPES.has(String(p.valueType ?? '')),
     }));
@@ -208,18 +212,30 @@ function requiredCount(factory: DiscoveredFactory): number {
  * than invented: any URI would be a fabricated link, and the create then fails
  * with the server's own message, which names what is missing.
  */
-export function requiredExtras(shape: unknown, marker: string): Array<{
+export async function requiredExtras(
+  shape: unknown,
+  marker: string,
+  /**
+   * Fetches the `oslc:allowedValue`s of a referenced allowed-values document.
+   * Optional: without it the behaviour is as before, which is to skip a
+   * required reference whose values are not inline.
+   */
+  resolveAllowedValues?: (documentURI: string) => Promise<string[]>
+): Promise<Array<{
   predicate: string;
   value: string;
   isReference: boolean;
-}> {
+}>> {
   const extras: Array<{ predicate: string; value: string; isReference: boolean }> = [];
 
   for (const property of requiredProperties(shape)) {
     const predicate = property.propertyDefinition;
     if (!predicate || ALREADY_SENT.has(predicate)) continue;
 
-    const allowed = property.allowedValues;
+    let allowed = property.allowedValues;
+    if (allowed.length === 0 && property.allowedValuesRef && resolveAllowedValues) {
+      allowed = await resolveAllowedValues(property.allowedValuesRef);
+    }
     if (allowed.length > 0) {
       const advertisedDefault = property.defaultValue;
       const preferred = allowed.find((value) => value !== advertisedDefault) ?? allowed[0];

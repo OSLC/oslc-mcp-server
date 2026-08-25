@@ -344,6 +344,31 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
 const GENERIC_TOOL_NAMES = new Set(GENERIC_TOOLS.map((t) => t.name));
 
 /** One connected OSLC server, as prepared by `main()`. */
+/**
+ * The current `JSESSIONID`, which Jazz servers want echoed as
+ * `X-Jazz-CSRF-Prevent` on a mutating request.
+ *
+ * Required by some operations and not others — measured, EWM accepted a `POST`
+ * to a creation factory without it and refused the `DELETE` of the resource it
+ * had just created, with a `403` that reads as a permission problem and is not
+ * one. Worse, that refusal *masks* a genuine permission refusal underneath, so
+ * a probe without the header can record "delete unsupported" for a server that
+ * supports it.
+ *
+ * Returns undefined against a server that sets no such cookie, where the header
+ * is simply not sent.
+ */
+async function jazzCsrfToken(client: OSLCClient, serverURL: string): Promise<string | undefined> {
+  try {
+    const jar = (client as any).jar;
+    if (!jar?.getCookies) return undefined;
+    const cookies = await jar.getCookies(serverURL);
+    return cookies?.find((c: { key: string }) => c.key === 'JSESSIONID')?.value;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface StartedServer {
   alias: string;
   client: OSLCClient;
@@ -698,6 +723,7 @@ export async function startServer(
               queryBase: probeBase,
               onDeleteUnsupported: probeArgs.onDeleteUnsupported ?? 'stop',
               manifestWrite: (line: string) => console.error(`[probe:manifest] ${line}`),
+              csrfToken: await jazzCsrfToken(client, config.serverURL),
             });
             // The file carries the transcripts; the tool result carries the
             // findings. A run over a provider with hundreds of members produces

@@ -149,6 +149,23 @@ At startup, the server:
 - `oslc://vocabulary` -- Resource types and their relationships
 - `oslc://shapes` -- Property definitions for each resource type (names, types, cardinalities)
 
+### Before probing a Jazz/ELM server
+
+`probe_oslc` writes, so the account it runs as needs to be able to write. Two things are worth
+settling first, because neither is visible to discovery — every creation factory advertises, every
+shape fetches, every `create_*` tool generates, and the POST still fails:
+
+- **A licence for each application you will probe.** Read access and write access are licensed
+  separately. Without one, a create answers `403` / `CRJAZ1848E` naming the licences that would
+  satisfy it.
+- **Delete permission**, if you want the probe to clean up after itself. Without it, delete answers
+  `403` / `CRJAZ6053E` and the fixture is left behind and reported as needing manual cleanup.
+
+The probe classifies both and reports them under **Refusals — administrative, not capability**,
+separately from the query cases, because neither is a finding about the server's OSLC support. It
+sends `X-Jazz-CSRF-Prevent` on mutations where it can obtain a `JSESSIONID`; Jazz requires that
+header on some operations and not others.
+
 ### Diagnosing a server
 
 OSLC leaves a great deal to the implementor, and provides no way for a client to discover which
