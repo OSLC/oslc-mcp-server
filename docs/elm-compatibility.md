@@ -405,13 +405,21 @@ baseline by POST because POST is supported returns 415 and an empty baseline.
 
 Measured 2026-08-25 across all three applications, as the first exercise of the write path.
 
-| Application | create | update | delete |
-|---|---|---|---|
-| **EWM** (`/ccm`) | **201** — with `filedAgainst` set to a real category | **200** | **403** — the account lacks *Delete a work item* |
-| **DOORS Next** (`/rm`) | **403** — missing licence | — | — |
-| **ETM** (`/qm`) | **403** — missing licence | — | — |
+**All three applications support the full cycle**, once the account is licensed and permitted:
 
-**Four different causes answered `403` in a single session**, and nothing in the status distinguishes
+| Application | create | read | update | delete | after delete |
+|---|---|---|---|---|---|
+| **EWM** (`/ccm`) | **201** — `filedAgainst` required | 200 | 200 | **204** | `404` |
+| **DOORS Next** (`/rm`) | **201** | 200 | 200 | **200** | `410 Gone` |
+| **ETM** (`/qm`) | **201** | 200 | 200 | **200** | `404` |
+
+Note the delete responses differ in every detail — `204` versus `200`, and `410` versus `404` on the
+subsequent read. All are defensible; none is predictable. **Treat any 2xx as success and any of
+404/410 as gone**, rather than matching an exact code.
+
+**Getting there took two rounds, and the first is the instructive one.** Before an administrator
+assigned licences and a delete permission, the same requests produced **four different causes behind
+one status code** in a single session, and nothing in the status distinguishes
 them. Each was identifiable only by reading the response body:
 
 | Attempt | Body says |
@@ -448,14 +456,19 @@ This is not a defect and not a client problem: it is an administrative assignmen
 **invisible to discovery** — the creation factories are advertised, the shapes fetch, the `create_*`
 tools generate, and every one of them fails at POST.
 
-**What this means for anyone planning to write.** Read capability is no evidence of write capability;
-they are governed by different licences. Establish the write path per application before planning
-work that depends on it, and do it with one resource of each type rather than a batch.
+**What this means for anyone planning to write.** Read capability is no evidence of write capability:
+against this deployment, every application could be read and browsed, every creation factory
+advertised, every shape fetched and every `create_*` tool generated — while two of the three refused
+every POST. The licences were assigned in minutes once asked for; the cost was the day spent assuming
+the client was at fault.
+
+So **establish the write path per application before planning work that depends on it**, with one
+resource of each type rather than a batch, and read the whole error body rather than the status.
 
 ## Still unknown
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
-- ~~**Whether create, update and delete actually work.**~~ — **answered, and the answer differs by application.** See quirk 17: EWM creates and updates; EWM delete is refused for want of a permission; DOORS Next and ETM refuse creation for want of a **licence**. What remains open is whether DOORS Next and ETM behave once licensed.
+- ~~**Whether create, update and delete actually work.**~~ — **answered: yes, on all three applications.** See quirk 17. The first attempt failed on all but EWM, for reasons that were entirely administrative (licences, a delete permission) and entirely invisible to discovery.
 - **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
 - **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
 - ~~**Whether creation factories enforce their advertised shapes**~~ — **answered: yes, and more strictly than the shape reads.** EWM enforces exactly what its shape declares required (`title`, `filedAgainst`), and additionally rejects one of that property's own advertised allowed values (`Unassigned`). See quirk 12. Which properties are genuinely *writable* remains open.
