@@ -478,6 +478,40 @@ the client was at fault.
 So **establish the write path per application before planning work that depends on it**, with one
 resource of each type rather than a batch, and read the whole error body rather than the status.
 
+### 18. EWM accepts a work-item state on create and silently discards it
+
+Measured 2026-08-25 against EWM, project area `JKE Banking (Change Management)`.
+
+A `POST` to the Defect creation factory carrying `oslc_cm:status "Resolved"` answers **201 Created**.
+Reading the resource back gives `oslc_cm:status "New"` and
+`rtc_cm:state …defectWorkflow.state.s1` — the workflow's initial state. The same substitution by
+`PUT` answers **200** and changes nothing. No error, no warning, in either direction.
+
+**The shape does say so**, and this is the useful part: both state properties are declared
+`oslc:readOnly true` —
+
+| Property | `dcterms:title` | |
+|---|---|---|
+| `oslc_cm:status` | **State** | `Zero-or-one`, `readOnly true` |
+| `rtc_cm:state` | **Status** | `Zero-or-one`, `readOnly true` |
+
+So a client that reads `oslc:readOnly` knows not to send it. A client that does send it gets a `2xx`
+and a resource that does not say what it asked for — **the create-side analogue of the ignored query
+filter**, and just as invisible without reading back.
+
+*(Note the titles: `oslc_cm:status` is titled "State" and `rtc_cm:state` is titled "Status". Match on
+the property definition, never on the title.)*
+
+**Workflow state is not writable over OSLC here, by either verb.** Reaching a non-initial state means
+driving EWM's own workflow actions, which is outside OSLC. Anything planning to author work items in
+a particular state should expect them all to land in the workflow's initial state, and decide whether
+that matters before authoring rather than after.
+
+**The general rule this argues for:** `oslc:readOnly` is worth honouring even though nothing enforces
+it at the protocol level, because a server is free to accept the value and drop it. And a create
+should be read back and compared against what was sent — for exactly the properties that were sent,
+since the response is otherwise a legitimate superset (quirk 17).
+
 ## Still unknown
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
