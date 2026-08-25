@@ -512,6 +512,19 @@ it at the protocol level, because a server is free to accept the value and drop 
 should be read back and compared against what was sent — for exactly the properties that were sent,
 since the response is otherwise a legitimate superset (quirk 17).
 
+**Open, and worth exploring — how the UI does it.** The EWM web UI *can* change a work item's
+lifecycle state, so some route exists. The working hypothesis is that it writes `rtc_cm:state` and the
+server derives `oslc_cm:status` from it, which fits what the two properties look like: `rtc_cm:state`
+carries a workflow-state **resource** that identifies the state, while `oslc_cm:status` carries a
+provider-defined **string** that reads as its label. `oslc_cm:status` is defined in OSLC CM 2.0, but
+plausibly retained from 1.0 rather than introduced there — which would put it alongside the other
+1.0-era shapes EWM keeps for backward compatibility (quirk 10).
+
+Not yet investigated. The route is to change a state in the web UI with the browser's network
+inspector open and see what is actually sent — the endpoint, the verb, and whether it is OSLC at all
+or one of EWM's own workflow-action APIs. If it turns out to be reachable, setting lifecycle state
+would be a **desirable** capability for an MCP client, though nothing currently depends on it.
+
 ## Still unknown
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
