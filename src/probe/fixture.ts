@@ -265,8 +265,28 @@ const ALREADY_SENT = new Set([
  * shape is skipped — there is no schema to satisfy, and no tool is generated
  * for it either.
  */
-export function chooseFixtureType(sp: DiscoveredServiceProvider): DiscoveredFactory | null {
+export function chooseFixtureType(
+  sp: DiscoveredServiceProvider,
+  /**
+   * The `oslc:resourceType` of the query capability about to be probed.
+   *
+   * A fixture is only useful to a capability that can see it, and a capability
+   * queries one resource type. Probing every capability against a single
+   * fixture makes each one whose type differs report "not visible" — which is
+   * correct behaviour misread as a finding. Measured against ELM, that turned
+   * 24 of 25 capabilities into a wall of `inconclusive`.
+   */
+  resourceType?: string
+): DiscoveredFactory | null {
   const usable = sp.factories.filter((f) => f.shape && f.creationURI);
   if (usable.length === 0) return null;
-  return usable.reduce((best, f) => (requiredCount(f) < requiredCount(best) ? f : best));
+
+  const matching = resourceType
+    ? usable.filter((f) => f.resourceType === resourceType)
+    : usable;
+  // No factory makes what this capability queries — ETM's fifteen capabilities
+  // are all like this. The caller samples instead; see runProbe.
+  if (matching.length === 0) return null;
+
+  return matching.reduce((best, f) => (requiredCount(f) < requiredCount(best) ? f : best));
 }

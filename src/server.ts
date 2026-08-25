@@ -480,6 +480,9 @@ async function probeEveryQueryCapability(
             // fixtures are named on stderr by the manifest either way.
             onDeleteUnsupported: 'read-only',
             manifestWrite: (line: string) => console.error(`[probe:manifest] ${line}`),
+            // So the fixture is created from a factory this capability can see.
+            resourceType: query.resourceType || undefined,
+            csrfToken: await jazzCsrfToken(runtime.spec.client, runtime.spec.config.serverURL),
           }));
         } catch (err) {
           console.error(

@@ -150,8 +150,14 @@ function queryFeatureLines(queryBase: string, probes?: ReadonlyMap<string, Probe
     lines.push(`    ${c.name}: ${mark(c.verdict)}` +
       (c.verdict === 'supported' ? '' : ` — ${c.reason}`));
   }
+  // Say which ground truth the verdicts actually rest on. This once asserted
+  // sampling while the verdicts beneath it read "inconclusive — fixture not
+  // visible": a note describing behaviour that was not happening, which is
+  // worse than no note.
   if (run.fixtureVisibleToQuery === false) {
-    lines.push('    NOTE: the created fixture never became visible to query, so filter verdicts rest on sampled data');
+    lines.push(run.groundTruthUsed === 'sampled'
+      ? '    NOTE: the fixture is not visible to this capability, so verdicts rest on sampled existing content'
+      : '    NOTE: the fixture is not visible to this capability and its members could not be sampled, so nothing could be judged');
   }
   if (run.needingCleanup.length > 0) {
     lines.push(`    LEFT BEHIND, needs manual cleanup: ${run.needingCleanup.join(', ')}`);

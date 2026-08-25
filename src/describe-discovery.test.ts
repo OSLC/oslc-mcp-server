@@ -277,12 +277,24 @@ describe('query features in the report', () => {
     ])]]))).toContain('some-future-case: NO — answered 501');
   });
 
-  it('warns when the fixture never became visible, and names what was left behind', () => {
+  it('says verdicts rest on sampled content when the fixture was not visible but sampling worked', () => {
     const text = report(new Map([[QUERY_BASE, run(
       [{ name: 'select', verdict: 'supported', reason: 'r' }],
-      { fixtureVisibleToQuery: false, deleteSupported: false, needingCleanup: ['http://elm/qm/res/1'] }
+      { fixtureVisibleToQuery: false, groundTruthUsed: 'sampled', deleteSupported: false, needingCleanup: ['http://elm/qm/res/1'] }
     )]]));
-    expect(text).toContain('never became visible to query');
+    expect(text).toContain('verdicts rest on sampled existing content');
     expect(text).toContain('LEFT BEHIND, needs manual cleanup: http://elm/qm/res/1');
+  });
+
+  it('says nothing could be judged when neither the fixture nor sampling supplied ground truth', () => {
+    // These two must not print the same note. The report once asserted sampling
+    // while every verdict beneath it read "inconclusive — fixture not visible":
+    // a note describing behaviour that was not happening.
+    const text = report(new Map([[QUERY_BASE, run(
+      [{ name: 'select', verdict: 'inconclusive', reason: 'no ground truth' }],
+      { fixtureVisibleToQuery: false, groundTruthUsed: 'fixture' }
+    )]]));
+    expect(text).toContain('could not be sampled, so nothing could be judged');
+    expect(text).not.toContain('verdicts rest on sampled existing content');
   });
 });

@@ -54,6 +54,14 @@ export interface ProbeRun {
   cases: CaseResult[];
   /** Absent in read-only mode, where there is no fixture to be visible. */
   fixtureVisibleToQuery?: boolean;
+  /**
+   * Which ground truth the verdicts actually rest on.
+   *
+   * Reported because the run's *mode* does not settle it: a fixture run whose
+   * fixture is invisible to a particular capability falls back to sampling, and
+   * a report that claims one while doing the other is worse than either.
+   */
+  groundTruthUsed?: 'fixture' | 'sampled';
   needingCleanup: string[];
   /** `null` when it was never established, because nothing was created. */
   deleteSupported: boolean | null;
@@ -287,6 +295,11 @@ export async function runProbe(args: {
   onDeleteUnsupported: 'stop' | 'proceed' | 'read-only';
   manifestWrite: (line: string) => void;
   /**
+   * The `oslc:resourceType` the query capability under test queries, so the
+   * fixture is created from a factory that makes something it can see.
+   */
+  resourceType?: string;
+  /**
    * Current `JSESSIONID`, sent as `X-Jazz-CSRF-Prevent` on every mutation.
    * Without it, Jazz servers refuse some mutations with a `403` that reads as a
    * permission problem — and a probe would record "delete unsupported" for a
@@ -294,7 +307,7 @@ export async function runProbe(args: {
    */
   csrfToken?: string;
 }): Promise<ProbeRun> {
-  const { http, sp, queryBase, onDeleteUnsupported, manifestWrite, csrfToken } = args;
+  const { http, sp, queryBase, onDeleteUnsupported, manifestWrite, csrfToken, resourceType } = args;
   const manifest = createManifest(manifestWrite);
   const serviceProvidersWritten: string[] = [];
   const needingCleanup: string[] = [];
@@ -318,7 +331,7 @@ export async function runProbe(args: {
   };
 
   // ── Phase 1: can this server be written to, and can what it writes be removed? ──
-  const factory = chooseFixtureType(sp);
+  const factory = chooseFixtureType(sp, resourceType);
   if (!factory || !factory.creationURI) {
     return readOnly('no creation factory advertised', null);
   }
@@ -394,6 +407,7 @@ export async function runProbe(args: {
 
   // ── Phase 3: read back; report only what was sent and did not return ──
   const { truth, dropped } = await readBackGroundTruth(http, created);
+  let groundTruthUsed: 'fixture' | 'sampled' = 'fixture';
 
   // ── Phase 4: is the fixture visible to query at all, before judging filters? ──
   const { usePost, caseResult: methodCase } = await detectUsePost(http, queryBase);
@@ -403,12 +417,29 @@ export async function runProbe(args: {
   const visibleMembers = memberURIs(unfiltered.body, queryBase);
   const fixtureVisibleToQuery = created.some((c) => visibleMembers.includes(c.uri));
 
-  const cases: CaseResult[] = fixtureVisibleToQuery
-    ? [methodCase, ...(await runCases({ http, queryBase, truth, usePost }))]
-    : [methodCase, ...allInconclusive(
-        'fixture not visible to query',
-        'the resources just created appear among the query base members'
+  // A fixture the capability cannot see is not a reason to answer nothing.
+  // §5.5: where a fixture cannot supply ground truth, it is *sampled* from
+  // existing content — reading members by URI, which does not go through the
+  // query index. Reporting `inconclusive` instead threw away every measurable
+  // case against project areas holding hundreds of resources.
+  //
+  // Only when sampling also finds nothing is the answer genuinely inconclusive,
+  // and then the reason says so rather than blaming the fixture.
+  let cases: CaseResult[];
+  if (fixtureVisibleToQuery) {
+    cases = [methodCase, ...(await runCases({ http, queryBase, truth, usePost }))];
+  } else {
+    const sampled = await sampleGroundTruth(http, visibleMembers);
+    if (sampled.resources.length > 0) {
+      groundTruthUsed = 'sampled';
+      cases = [methodCase, ...(await runCases({ http, queryBase, truth: sampled, usePost }))];
+    } else {
+      cases = [methodCase, ...allInconclusive(
+        'the fixture is not visible to this query capability and its members could not be sampled',
+        'either the created resources appear among the query base members, or existing members can be read by URI'
       )];
+    }
+  }
 
   for (const drop of dropped) {
     cases.push({
@@ -434,6 +465,7 @@ export async function runProbe(args: {
     serviceProvidersWritten,
     cases,
     fixtureVisibleToQuery,
+    groundTruthUsed,
     needingCleanup,
     deleteSupported,
     refusals,

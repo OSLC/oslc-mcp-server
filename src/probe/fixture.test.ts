@@ -315,3 +315,43 @@ describe('allowed values referenced rather than inlined', () => {
     expect(fetched).toBe(false);
   });
 });
+
+describe('choosing a fixture type for a particular query capability', () => {
+  const factory = (title: string, resourceType: string, required = 0) => ({
+    title,
+    creationURI: `https://elm.example.com/create/${title}`,
+    resourceType,
+    shape: {
+      properties: Array.from({ length: required }, (_, i) => ({
+        name: `p${i}`, occurs: 'http://open-services.net/ns/core#Exactly-one',
+      })),
+    },
+  });
+  const REQUIREMENT = 'http://open-services.net/ns/rm#Requirement';
+  const COLLECTION = 'http://open-services.net/ns/rm#RequirementCollection';
+
+  it('creates from a factory the capability can actually see', () => {
+    // One fixture probed against every capability made each one whose type
+    // differed report "not visible" — correct behaviour misread as a finding.
+    const sp = { factories: [factory('Collection', COLLECTION), factory('Requirement', REQUIREMENT)] } as any;
+    expect(chooseFixtureType(sp, REQUIREMENT)?.title).toBe('Requirement');
+    expect(chooseFixtureType(sp, COLLECTION)?.title).toBe('Collection');
+  });
+
+  it('returns null when no factory makes what the capability queries', () => {
+    // Every one of ETM's fifteen capabilities is like this. The caller samples
+    // instead of reporting inconclusive.
+    const sp = { factories: [factory('Requirement', REQUIREMENT)] } as any;
+    expect(chooseFixtureType(sp, 'http://open-services.net/ns/qm#TestCase')).toBeNull();
+  });
+
+  it('still prefers the least demanding shape among matching factories', () => {
+    const sp = { factories: [factory('Heavy', REQUIREMENT, 5), factory('Light', REQUIREMENT, 1)] } as any;
+    expect(chooseFixtureType(sp, REQUIREMENT)?.title).toBe('Light');
+  });
+
+  it('considers every factory when no resource type is given', () => {
+    const sp = { factories: [factory('Collection', COLLECTION), factory('Requirement', REQUIREMENT)] } as any;
+    expect(chooseFixtureType(sp, undefined)).not.toBeNull();
+  });
+});
