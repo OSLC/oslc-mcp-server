@@ -401,10 +401,61 @@ The converse also matters: an **unparameterised** query must go as GET even wher
 is nothing to put in the body, and the servers refuse an empty one — so requesting the unfiltered
 baseline by POST because POST is supported returns 415 and an empty baseline.
 
+### 17. The write path: one status code, four causes, and only the body tells them apart
+
+Measured 2026-08-25 across all three applications, as the first exercise of the write path.
+
+| Application | create | update | delete |
+|---|---|---|---|
+| **EWM** (`/ccm`) | **201** — with `filedAgainst` set to a real category | **200** | **403** — the account lacks *Delete a work item* |
+| **DOORS Next** (`/rm`) | **403** — missing licence | — | — |
+| **ETM** (`/qm`) | **403** — missing licence | — | — |
+
+**Four different causes answered `403` in a single session**, and nothing in the status distinguishes
+them. Each was identifiable only by reading the response body:
+
+| Attempt | Body says |
+|---|---|
+| EWM create, no `filedAgainst` | `'Save Work Item' failed. Preconditions have not been met: The 'Filed Against' attribute needs to be set` |
+| EWM create, `filedAgainst` = **`Unassigned`** | the same message — an advertised allowed value that behaves as *not set* |
+| EWM delete, no CSRF header | `The user has the roles required to perform this operation, but the permission has been denied because this request might have been forged… add a new HTTP header with the name 'X-Jazz-CSRF-Prevent'` |
+| EWM delete, **with** CSRF header | `CRJAZ6053E … you need these permissions: 'Delete a work item (delete)'` |
+| DOORS Next create | `CRJAZ1848E To perform the "com.ibm.rrs.team.saveArtifact" operation, the user must have one of the following licenses…` |
+| ETM create | `CRJAZ1848E … "Save Test Case" operation … must have one of the following licenses…` |
+
+**The CSRF failure masked the real one.** EWM delete answers `403`-CSRF first; only once the header is
+supplied does it answer `403`-permissions. A client that stops at the first `403` concludes the wrong
+thing, and a client that reads only the status concludes nothing at all.
+
+**`X-Jazz-CSRF-Prevent` is required for some mutating requests and not others.** EWM `POST` to a
+creation factory succeeded with **no** CSRF header and no session cookie. EWM `DELETE` on the resource
+it had just created refused without one. So CSRF enforcement varies **by operation**, not by
+application — do not infer it from a successful create.
+
+To supply it: establish a session, take the `JSESSIONID` cookie value, and send it as the header
+value. It is a credential; keep it out of logs and transcripts.
+
+**The error vocabulary differs by application, which defeats a single extraction.** ETM and EWM report
+under `oslc:message`; DOORS Next reports under **`err:detailedMessage`**
+(`http://jazz.net/xmlns/prod/jazz/foundation/1.0/`) and emits no `oslc:message` at all. A client
+looking only for `oslc:message` sees a `403` with an empty body from DOORS Next and has nothing to
+report — which is exactly what happened here before the second vocabulary was tried. **Read both.**
+
+**Licensing presents as `403`, wraps an upstream `400`, and names what is missing.** DOORS Next
+returned `CRRRS6254E … Status=400. Message: CRJAZ1848E`, listing the licences that would satisfy it
+(*ELM Base.Practitioner*, *ETM Quality Professional*, *DOORS Next Analyst*) and the user it checked.
+This is not a defect and not a client problem: it is an administrative assignment, and it is
+**invisible to discovery** — the creation factories are advertised, the shapes fetch, the `create_*`
+tools generate, and every one of them fails at POST.
+
+**What this means for anyone planning to write.** Read capability is no evidence of write capability;
+they are governed by different licences. Establish the write path per application before planning
+work that depends on it, and do it with one resource of each type rather than a batch.
+
 ## Still unknown
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
-- **Whether create, update and delete actually work.** `list_resource_types` and unfiltered query are confirmed against all applications that support them; the write path has not been exercised.
+- ~~**Whether create, update and delete actually work.**~~ — **answered, and the answer differs by application.** See quirk 17: EWM creates and updates; EWM delete is refused for want of a permission; DOORS Next and ETM refuse creation for want of a **licence**. What remains open is whether DOORS Next and ETM behave once licensed.
 - **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
 - **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
 - ~~**Whether creation factories enforce their advertised shapes**~~ — **answered: yes, and more strictly than the shape reads.** EWM enforces exactly what its shape declares required (`title`, `filedAgainst`), and additionally rejects one of that property's own advertised allowed values (`Unassigned`). See quirk 12. Which properties are genuinely *writable* remains open.
