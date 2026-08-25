@@ -212,3 +212,51 @@ describe('caseWhereConstructs — each construct judged against its own correct 
     expect((await only('inequality', all)).verdict).toBe('ignored');
   });
 });
+
+describe('caseNegationPair against a paged baseline', () => {
+  const R = (n: number) => `https://elm.example.com/rm/r/${n}`;
+  const QB = 'https://elm.example.com/rm/views';
+  const body = (uris: string[]) =>
+    `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" ` +
+    `xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">` +
+    `<rdf:Description rdf:about="${QB}">` +
+    uris.map((u) => `<rdfs:member rdf:resource="${u}"/>`).join('') +
+    `</rdf:Description></rdf:RDF>`;
+
+  function http(bodies: string[]) {
+    let i = 0;
+    return { request: jest.fn(async () => ({
+      status: 200, headers: { 'content-type': 'application/rdf+xml' },
+      data: bodies[Math.min(i++, bodies.length - 1)],
+    })) } as any;
+  }
+
+  const truth = (baseline: string[]) => ({
+    kind: 'sampled' as const,
+    resources: [{ uri: R(1), properties: new Map([['http://purl.org/dc/terms/identifier', ['A']]]) }],
+    baseline,
+  });
+
+  it('is inconclusive, not NO, when the halves exceed the baseline', async () => {
+    // The baseline was one page; the two halves legitimately return more. Reading
+    // that as a failed partition records a working filter as broken — and it
+    // would go into a public findings document as a defect in the product.
+    const result = await caseNegationPair({
+      http: http([body([R(1)]), body([R(2), R(3), R(4)])]),
+      queryBase: QB, truth: truth([R(1), R(2)]), usePost: true,
+      known: { term: 'dcterms:identifier', value: 'A', uri: R(1) },
+    } as any);
+    expect(result.verdict).toBe('inconclusive');
+    expect(result.reason).toMatch(/page rather than the whole collection/);
+    expect(result.expected).toBeDefined();
+  });
+
+  it('still judges a genuine partition when the baseline is complete', async () => {
+    const result = await caseNegationPair({
+      http: http([body([R(1)]), body([R(2), R(3)])]),
+      queryBase: QB, truth: truth([R(1), R(2), R(3)]), usePost: true,
+      known: { term: 'dcterms:identifier', value: 'A', uri: R(1) },
+    } as any);
+    expect(result.verdict).toBe('supported');
+  });
+});

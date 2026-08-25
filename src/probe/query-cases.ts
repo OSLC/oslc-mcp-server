@@ -296,11 +296,33 @@ export async function caseNegationPair(ctx: CaseContext): Promise<CaseResult> {
       return { name: 'negation-pair', verdict: 'unsupported', reason: `${label} answered ${response.status}`, transcripts };
     }
   }
-  const judged = judgePartition({
-    matching: memberURIs(matching.body, ctx.queryBase),
-    notMatching: memberURIs(notMatching.body, ctx.queryBase),
-    baseline: ctx.truth.baseline,
-  });
+  const matched = memberURIs(matching.body, ctx.queryBase);
+  const notMatched = memberURIs(notMatching.body, ctx.queryBase);
+
+  // A partition can only be checked against a *complete* baseline. Where the
+  // baseline was one page of a larger collection, the two halves legitimately
+  // return resources it never listed, and the test reads that as "did not
+  // account for the baseline" — recording a filter that works as broken.
+  //
+  // Measured against EWM: the negation returned 95 resources the unfiltered
+  // query had not, and the verdict was NO. That would have gone into a public
+  // findings document as a defect in the product.
+  const returned = new Set([...matched, ...notMatched]);
+  const beyondBaseline = [...returned].filter((uri) => !ctx.truth.baseline.includes(uri));
+  if (beyondBaseline.length > 0) {
+    return {
+      name: 'negation-pair',
+      verdict: 'inconclusive',
+      reason:
+        `the filter and its negation returned ${beyondBaseline.length} resource(s) the unfiltered query ` +
+        `did not list, so the baseline of ${ctx.truth.baseline.length} was a page rather than the whole ` +
+        'collection and a partition cannot be checked against it',
+      expected: 'an unfiltered baseline listing every member, which a filter and its negation then divide exactly',
+      transcripts,
+    };
+  }
+
+  const judged = judgePartition({ matching: matched, notMatching: notMatched, baseline: ctx.truth.baseline });
   return { name: 'negation-pair', ...judged, transcripts };
 }
 
