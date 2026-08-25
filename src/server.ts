@@ -36,6 +36,8 @@ import { formatProbeReport } from './probe/report.js';
 import { writeFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { checkTurtleSupport, formatTurtleCheck, type HttpGetter } from './representation.js';
+import { buildPrefixDeclaration, undeclarablePrefixes } from './oslc-prefixes.js';
+import { membersFromStore, totalCountFromStore } from './oslc-members.js';
 
 const { serialize: rdfSerialize } = rdflib;
 
@@ -111,10 +113,20 @@ class HttpToolContext {
   }
 
   async queryResources(queryURL: string, params: { filter?: string; select?: string; orderBy?: string }): Promise<string> {
+    const clauses = [params.filter, params.select, params.orderBy];
     const parts: string[] = [];
+
+    // Declare the prefixes the clauses use. Servers differ on what they
+    // predefine and DOORS Next predefines nothing, so an undeclared `dcterms:`
+    // is a 400 there and works elsewhere. Declaring costs nothing where the
+    // server already knows the prefix.
+    const prefixDeclaration = buildPrefixDeclaration(clauses);
+    if (prefixDeclaration) parts.push(`oslc.prefix=${encodeURIComponent(prefixDeclaration)}`);
+
     if (params.filter) parts.push(`oslc.where=${encodeURIComponent(params.filter)}`);
     if (params.select) parts.push(`oslc.select=${encodeURIComponent(params.select)}`);
     if (params.orderBy) parts.push(`oslc.orderBy=${encodeURIComponent(params.orderBy)}`);
+
     // A queryBase may already carry query parameters — DOORS Next advertises
     // bases like `.../query?componentURI=…`. Appending '?' unconditionally
     // produced a URL with two '?', which the server accepts and silently
@@ -123,32 +135,39 @@ class HttpToolContext {
     const fullURL = parts.length > 0 ? `${queryURL}${separator}${parts.join('&')}` : queryURL;
     const resource = await this.client.getResource(fullURL, '2.0', ACCEPT_RDF);
 
-    // Extract member resources from the LDP container response.
-    // The query response is an LDP BasicContainer with ldp:contains
-    // or rdfs:member links to the result resources.
-    // Note: the store's container subject uses the base URL without
-    // query parameters, even though fullURL includes them.
     const store = resource.store;
+    // The store's container subject uses the base URL without query parameters,
+    // even though fullURL includes them.
     const containerBaseURL = fullURL.split('?')[0];
-    const containerSym = store.sym(containerBaseURL);
-    const LDP_CONTAINS = 'http://www.w3.org/ns/ldp#contains';
-    const RDFS_MEMBER = 'http://www.w3.org/2000/01/rdf-schema#member';
+    const memberURIs = membersFromStore(store, containerBaseURL);
+    const totalCount = totalCountFromStore(store);
+    const undeclared = undeclarablePrefixes(clauses);
 
-    const memberNodes = [
-      ...store.each(containerSym, store.sym(LDP_CONTAINS), undefined),
-      ...store.each(containerSym, store.sym(RDFS_MEMBER), undefined),
-    ];
-
-    if (memberNodes.length > 0) {
-      // Return each member as a JSON object
-      const members = memberNodes
-        .filter(n => n.termType === 'NamedNode')
-        .map(n => resourceToJson(store, n.value));
-      return JSON.stringify(members, null, 2);
+    if (memberURIs.length === 0) {
+      // No members found. Return the container itself rather than an empty
+      // list: an empty list reads as "nothing matched", and the likelier causes
+      // are an undeclared prefix or a membership predicate we failed to read.
+      return JSON.stringify({
+        members: [],
+        totalCount,
+        note:
+          'No members were read from this response. If the server reported a totalCount above zero, ' +
+          'the membership predicate was not recognised. Check the container representation below.',
+        undeclaredPrefixes: undeclared.length > 0 ? undeclared : undefined,
+        container: resourceToJson(store, fullURL),
+      }, null, 2);
     }
 
-    // Fallback: return the container itself
-    return JSON.stringify(resourceToJson(store, fullURL));
+    const members = memberURIs.map((uri) => resourceToJson(store, uri));
+
+    // totalCount is reported alongside, not instead: they differ legitimately
+    // when a response is paged, and informatively when membership was misread.
+    return JSON.stringify({
+      members,
+      count: members.length,
+      totalCount,
+      undeclaredPrefixes: undeclared.length > 0 ? undeclared : undefined,
+    }, null, 2);
   }
 
   getGeneratedHandler(_name: string): ((args: Record<string, unknown>) => Promise<string>) | undefined {
@@ -267,7 +286,9 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
   {
     name: 'query_resources',
     description:
-      'Query OSLC resources using a query capability URL. With one consolidated QueryCapability per ServiceProvider, narrow by resource type by passing oslc.where=rdf:type=<...> in the filter argument.',
+      'Query OSLC resources using a query capability URL. With one consolidated QueryCapability per ServiceProvider, narrow by resource type by passing oslc.where=rdf:type=<...> in the filter argument. '
+      + 'Prefixes used in filter/select/orderBy are declared automatically for well-known vocabularies (dcterms, oslc, rdf, the OSLC domains, and the Jazz vocabularies); a prefix that cannot be declared is reported back as undeclaredPrefixes. '
+      + 'Returns { members, count, totalCount } — totalCount is the server\'s own count of the whole result set and may exceed count when the response is paged.',
     inputSchema: {
       type: 'object',
       properties: {

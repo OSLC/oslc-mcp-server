@@ -1,9 +1,7 @@
 import rdflib from 'rdflib';
+import { membersFromStore } from '../oslc-members.js';
 
-const { graph, parse, sym } = rdflib as any;
-
-const RDFS_MEMBER = 'http://www.w3.org/2000/01/rdf-schema#member';
-const LDP_CONTAINS = 'http://www.w3.org/ns/ldp#contains';
+const { graph, parse } = rdflib as any;
 
 /**
  * The outcome of one probe case (§8).
@@ -26,35 +24,14 @@ export interface CaseResult {
 /**
  * Member URIs of a query response.
  *
- * Servers vary in how they express membership, so both rdfs:member and
- * ldp:contains are accepted. An unparseable body yields an empty list rather
- * than an exception — a body that does not parse is a result to record, not a
- * crash.
- */
-const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
-const OSLC_RESPONSE_INFO = 'http://open-services.net/ns/core#ResponseInfo';
-
-/**
- * Predicates a container carries that are description, not membership.
+ * The reading itself is shared with the generic `query_resources` tool — see
+ * `membersFromStore` for why standard predicates alone are not enough. Here it
+ * takes the response as text, because the probe records what came off the wire
+ * rather than a parsed resource.
  *
- * Needed because membership is inferred structurally when no standard predicate
- * is present, and a container also says things about itself. Kept deliberately
- * short: anything not listed is treated as membership, so a domain predicate
- * nobody anticipated still counts — which is the whole point.
+ * An unparseable body yields an empty list rather than an exception — a body
+ * that does not parse is a result to record, not a crash.
  */
-const NOT_MEMBERSHIP = new Set([
-  RDF_TYPE,
-  'http://open-services.net/ns/core#nextPage',
-  'http://open-services.net/ns/core#responseInfo',
-  'http://open-services.net/ns/core#totalCount',
-  'http://open-services.net/ns/core#serviceProvider',
-  'http://open-services.net/ns/core#instanceShape',
-  'http://open-services.net/ns/basicProfile#containerSortPredicates',
-  'http://purl.org/dc/terms/title',
-  'http://purl.org/dc/terms/description',
-  'http://purl.org/dc/terms/publisher',
-]);
-
 export function memberURIs(rdfXml: string, queryBase: string): string[] {
   const store = graph();
   try {
@@ -62,34 +39,7 @@ export function memberURIs(rdfXml: string, queryBase: string): string[] {
   } catch {
     return [];
   }
-  const uris: string[] = [];
-  for (const predicate of [RDFS_MEMBER, LDP_CONTAINS]) {
-    for (const statement of store.statementsMatching(null, sym(predicate), null)) {
-      if (statement.object.termType === 'NamedNode') uris.push(statement.object.value);
-    }
-  }
-  if (uris.length > 0) return [...new Set(uris)];
-
-  // No standard membership predicate. That is not an empty result: OSLC's domain
-  // specifications give query responses their own membership predicate, and ELM's
-  // QM server uses one — a Test Case query answers 200 with `oslc:totalCount 30`
-  // and links each result by `oslc_qm:testCase`, never `rdfs:member`. Reading only
-  // the standard predicates reported thirty test cases as zero, and every filter
-  // case then went `inconclusive` for want of a baseline.
-  //
-  // So membership is taken structurally: whatever the container points at. The
-  // container is the query base, or the `oslc:ResponseInfo` node, which ELM
-  // publishes under a paged URI of its own rather than the query base.
-  const containers = [sym(queryBase), ...store.each(null, sym(RDF_TYPE), sym(OSLC_RESPONSE_INFO))];
-  for (const container of containers) {
-    for (const statement of store.statementsMatching(container as never, null, null)) {
-      if (statement.object.termType !== 'NamedNode') continue;
-      if (NOT_MEMBERSHIP.has(statement.predicate.value)) continue;
-      if (statement.object.value === container.value) continue;
-      uris.push(statement.object.value);
-    }
-  }
-  return [...new Set(uris)];
+  return membersFromStore(store, queryBase);
 }
 
 const sameSet = (a: string[], b: string[]): boolean =>
