@@ -92,7 +92,8 @@ value trusted from a five-member sample. Each of those produced a *false* negati
 they accounted for most of what an earlier run reported as missing query support. **Where a probe and
 a server disagree, suspect the probe first.** All three applications support `oslc.where` on
 `dcterms:identifier` and `dcterms:title`, `oslc.select`, and paging; none supports `oslc.searchTerms`;
-`oslc.orderBy` is honoured by DOORS Next and **ignored** by EWM and ETM.
+`oslc.orderBy` **varies by capability rather than by application** — see quirk 19, which measures it
+per query base and supersedes the summary here.
 
 > **Correction, 2026-08-25.** An earlier version of this caveat said these were taken against
 > **configuration-enabled** project areas without supplying a `Configuration-Context`, and treated the
@@ -524,6 +525,55 @@ Not yet investigated. The route is to change a state in the web UI with the brow
 inspector open and see what is actually sent — the endpoint, the verb, and whether it is OSLC at all
 or one of EWM's own workflow-action APIs. If it turns out to be reachable, setting lifecycle state
 would be a **desirable** capability for an MCP client, though nothing currently depends on it.
+
+### 19. Query support measured per capability, and it varies *within* an application
+
+Measured 2026-08-25 across all 25 query capabilities of the three applications, with a type-matched
+fixture where a creation factory made what the capability queries, and sampled ground truth otherwise.
+
+| | ETM (15 capabilities) | DOORS Next (8) | EWM (2) |
+|---|---|---|---|
+| POST-query | **15 yes** | 1 yes, 7 no | **2 no** (415) |
+| `oslc.select` | **15 yes** | 3 yes, 4 no | **2 yes** |
+| `oslc.where` by identity | 10 yes, 5 inconclusive | 8 inconclusive | **2 yes** |
+| negation pair | 10 yes, 5 inconclusive | 8 inconclusive | 1 yes |
+| `oslc.paging` | 9 yes, 6 inconclusive | 1 ignored, 7 inconclusive | 1 yes |
+| `oslc.orderBy` | 2 yes, 6 **ignored**, 2 no, 5 inconclusive | 8 inconclusive | 1 yes, 1 **ignored** |
+| `oslc.searchTerms` | **9 no**, 6 inconclusive | 8 inconclusive | 1 no |
+
+**The headline: `oslc.orderBy` is not an application-level property.** An earlier version of quirk 6
+recorded it as "honoured by DOORS Next and ignored by EWM and ETM". Measured per capability that is
+wrong in both directions: within ETM, two capabilities honour it, six accept and **ignore** it, and
+two refuse it outright; within EWM, one capability honours it and the other ignores it. **Ask per
+query base, not per product** — and treat `ignored` as the answer you are most likely to get, since it
+is the one that returns `200`.
+
+**ETM is the strongest OSLC query implementation of the three here**, which inverts the impression
+left by the first probe run. It accepts POST-query on every capability, honours `oslc.select`
+everywhere, and applies `oslc.where` wherever the sampled content could distinguish a value. The
+earlier "ETM advertised no query capabilities" and the wall of `inconclusive` after it were both
+artifacts on our side — a stale service-provider URI, then a probe that created one fixture and
+measured every capability against it (quirk 13, and the note below).
+
+**DOORS Next's numbers read worse than they are.** Seven of its eight capabilities are administrative
+— ReqIF definitions, attribute definitions, link types, folders — and several answer `403` to a query
+at all. Only `Query Capability` queries requirements, and it is the one that reports POST-query and
+`oslc.select` working. Read the DNG row as "one domain capability, measured" plus seven that were
+never RM data (quirk 15).
+
+**`inconclusive` here means the ground truth could not distinguish anything**, not that the server
+failed. Where a capability is sampled rather than fixtured, the probe reads the first few members by
+URI; if they share every value there is nothing to filter on. Eleven capabilities reported
+`no value identifies exactly one resource`, and that one shortage cascades into `where-identity`,
+the negation pair, the `where` constructs and prefix discovery. A deeper or better-spread sample would
+settle most of them.
+
+> **One verdict in the run behind this table is known wrong and has been fixed since.** EWM's negation
+> pair recorded `NO — 95 resource(s) were returned that the unfiltered query did not`. The unfiltered
+> baseline was a single page of a larger collection, so the two halves legitimately returned resources
+> it never listed, and the partition test read that as a failure. It now reports `inconclusive` and
+> says the baseline was paged. **A working filter was one step from being published as a product
+> defect** — which is why the probe's own results are worth suspecting before a server's.
 
 ## Still unknown
 
