@@ -94,7 +94,20 @@ a server disagree, suspect the probe first.** All three applications support `os
 `dcterms:identifier` and `dcterms:title`, `oslc.select`, and paging; none supports `oslc.searchTerms`;
 `oslc.orderBy` is honoured by DOORS Next and **ignored** by EWM and ETM.
 
-> **Read these as observations, not as established product behaviour.** They were taken against **configuration-enabled** project areas, on a deployment whose configuration management was known to be misbehaving at the time, and **without supplying a `Configuration-Context`**. The requests also declared no **`oslc.prefix`** for the prefixes used in the filter. DOORS Next is expected to support `oslc.where`, so the most likely explanations are the missing configuration context or the undeclared prefix rather than the product. **The cause is not established.** This section will be revised once the same probes run against non-configuration-enabled project areas with prefixes declared.
+> **Correction, 2026-08-25.** An earlier version of this caveat said these were taken against
+> **configuration-enabled** project areas without supplying a `Configuration-Context`, and treated the
+> missing context as a likely cause. That was wrong: **no project area on the deployment is
+> configuration-enabled**. There was no context to supply and none missing, so the configuration
+> confound never existed.
+>
+> What remained was the undeclared **`oslc.prefix`** (quirk 15), and that alone accounted for the
+> DOORS Next results: with prefixes declared, `oslc.where` and `oslc.select` both work and the type
+> filter is genuinely applied (570 + 12 = 582). So the measurements above are cleaner than they were
+> recorded as being — the cause was ours, not the product's, and not the configuration.
+>
+> Worth keeping as a lesson in its own right: **an unverified assumption about the environment
+> outlived the defect it was invented to explain.** It was recorded as a caveat, repeated, and would
+> have sent the next reader looking for a configuration problem that was never there.
 
 What is worth recording regardless is the **shape** of the DOORS Next result: a filter that did not take effect, returned with a `200` and nothing to indicate it had been discarded. Whether the cause is the product, the absent configuration context, or an undeclared prefix, **a client cannot tell from the response** — and a consumer reasoning over the result would be confidently wrong. An assistant asking "which requirements have no test coverage?" would get every requirement back and report accordingly.
 
@@ -469,8 +482,8 @@ resource of each type rather than a batch, and read the whole error body rather 
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
 - ~~**Whether create, update and delete actually work.**~~ — **answered: yes, on all three applications.** See quirk 17. The first attempt failed on all but EWM, for reasons that were entirely administrative (licences, a delete permission) and entirely invisible to discovery.
-- **Whether the query results in quirk 6 survive a clean test** — non-configuration-enabled project areas, a supplied `Configuration-Context` where one applies, and `oslc.prefix` declared. Until then that section records symptoms, not causes.
-- **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse.
+- ~~**Whether the query results in quirk 6 survive a clean test**~~ — **answered.** The deployment has no configuration-enabled project areas, so that confound never existed; declaring `oslc.prefix` accounted for the DOORS Next results on its own. See the correction in quirk 6.
+- **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse. **Not testable on this deployment yet:** no project area is configuration-enabled. Check it before bulk-creating content in one that is, not after.
 - ~~**Whether creation factories enforce their advertised shapes**~~ — **answered: yes, and more strictly than the shape reads.** EWM enforces exactly what its shape declares required (`title`, `filedAgainst`), and additionally rejects one of that property's own advertised allowed values (`Unassigned`). See quirk 12. Which properties are genuinely *writable* remains open.
 
 ---
