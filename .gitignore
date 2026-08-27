@@ -9,4 +9,6 @@ oslc-mcp-server*.yaml
 # The discovery report at its default path is a runtime artifact, rewritten on
 # every start. To keep one as committed context, point `reportPath` at a
 # deliberate location (e.g. docs/discovery-<deployment>.md) and commit that.
-oslc-discovery.md
+# Discovery reports — generated, rewritten on every server start. One per config:
+# `reportPath` in each oslc-mcp-server*.yaml names its own file.
+oslc-discovery*.md
