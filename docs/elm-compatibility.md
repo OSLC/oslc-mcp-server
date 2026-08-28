@@ -617,11 +617,15 @@ This is a sound design — under configuration management a backlink would have 
 stream-scoped, and an incoming link is a *question about a configuration* rather than a fact about a
 resource — but it has a sharp consequence for any client.
 
-**What breaks, and it breaks quietly.** Code that finds incoming links by reading the target's
-representation works perfectly on a non-configuration-enabled project area and returns **nothing** on
-a configuration-enabled one. No error, no warning: the requirement simply appears to have no incoming
-links, exactly as if none had ever been created. That is the same failure shape as an ignored query
-filter — a correct-looking answer that is wrong.
+**A client that queries links is unaffected.** Ask for the incoming direction — through LQE or a link
+index — and the answer is the same before and after; only where it is stored has changed. This is not
+a capability being withdrawn.
+
+**What breaks is reading an incoming link off the target's representation.** That works on a
+non-configuration-enabled project area, because the backlink happens to be stored there, and returns
+**nothing** on a configuration-enabled one. No error, no warning: the requirement simply appears to
+have no incoming links. That is the same failure shape as an ignored query filter — a correct-looking
+answer that is wrong.
 
 **So do not read incoming links off the resource.** Ask LQE, or a link index, from the start. A client
 that does this from the beginning behaves identically before and after configuration management is
