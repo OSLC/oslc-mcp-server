@@ -503,8 +503,9 @@ filter**, and just as invisible without reading back.
 *(Note the titles: `oslc_cm:status` is titled "State" and `rtc_cm:state` is titled "Status". Match on
 the property definition, never on the title.)*
 
-**Workflow state is not writable over OSLC here, by either verb.** Reaching a non-initial state means
-driving EWM's own workflow actions, which is outside OSLC. Anything planning to author work items in
+**Writing the state property is not how it is done — but the state *is* reachable over OSLC**, by
+naming a workflow transition with `?_action=` on the `PUT`. See quirk 22, which supersedes the
+conclusion this paragraph originally drew. Anything planning to author work items in
 a particular state should expect them all to land in the workflow's initial state, and decide whether
 that matters before authoring rather than after.
 
@@ -635,6 +636,67 @@ turns configurations on — long after the code was written and tested.
 **Verification that counts incoming links is affected too.** A check that passes today against a
 non-configuration-enabled project area will pass for the wrong reason and then fail silently later.
 Verify through the same query path the eventual client will use.
+
+### 22. Work-item state *is* settable over OSLC — by naming the transition, not the state
+
+Measured 2026-08-28 against EWM, project area `Acme AEB-200 (Change Management)`.
+
+Quirk 18 records that writing `oslc_cm:status` is accepted and discarded, and concluded that reaching
+a non-initial state means EWM's own APIs, outside OSLC. **The first half is right and the conclusion
+is wrong.** State is reachable through the ordinary OSLC endpoint:
+
+```
+PUT  <workItemURI>?_action=<workflowActionId>
+     Content-Type: application/rdf+xml
+     If-Match: <etag>
+     X-Jazz-CSRF-Prevent: <JSESSIONID>
+     <the resource's own representation, unchanged>
+```
+
+**Name a transition, never a destination.** That is why writing `status` cannot work: a state is a
+*destination*, and the workflow decides which are reachable from where. `?_action=` names an edge in
+the state machine and lets the server compute the target. EWM does **not** validate that the item's
+properties suit the new state — that is the caller's judgement, exactly as in the UI.
+
+**This is not OSLC Actions.** The [Actions specification][actions] describes `oslc:action` on the
+resource with `oslc:binding` per action; EWM advertises neither, on the resource or the service
+provider. `?_action=` is a Jazz convention layered on the OSLC `PUT`.
+
+#### Discovering the action ids
+
+Three steps, all OSLC, no hard-coding:
+
+1. Read the work item's `oslc:instanceShape`.
+2. On that shape, find `rtc_cm:state` and follow its `oslc:allowedValues`. Each value URI has the form
+   `…/oslc/workflows/{projectAreaId}/states/{workflowId}/{stateId}` — **the workflow id is in the
+   path**.
+3. `GET …/oslc/workflows/{projectAreaId}/actions/{workflowId}` for that workflow's actions.
+
+Measured on one project area:
+
+| Work-item type | Workflow | Actions | Closes with |
+|---|---|---|---|
+| Task | `taskWorkflow` | 6 | **`complete`** → `Done` |
+| Defect | `defectWorkflow` | 8 | **`resolve`** → `Done` |
+| Capability | `capabilityWorkflow` | 12 | **`accept`** → `Accepted`, and only from `Releasing` |
+
+**A workflow may need several transitions to reach a closed state.** Capability took eight from
+`Draft`: `analyze → ready → approve → implement → validate → deploy → release → accept`. There is no
+shortcut; each is a separate `PUT`.
+
+#### The trap: an unavailable transition answers 200 and does nothing
+
+Sending `?_action=…accept` while the item is in `Approved` — where `accept` is not available —
+returned **`200`** and left the state untouched. No error, no message. This is the same silent-success
+shape as an ignored query parameter, and it is easy to build a "close all these items" loop that
+reports success while changing nothing.
+
+**So verify the transition took**, and verify it on **`oslc_cm:closed`**, not on the status string:
+closure reads `Done` for Task and Defect but `Accepted` for Capability, and the Capability workflow has
+no `Done` state at all. `oslc_cm:closed` is the boolean that means the same thing across every
+workflow.
+
+[actions]: https://docs.oasis-open-projects.org/oslc-op/actions/v1.0/
 
 ## Still unknown
 
