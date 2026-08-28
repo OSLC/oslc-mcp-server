@@ -603,6 +603,35 @@ resource** in the work item's own representation. A client reading `dcterms:titl
 matching element then reads the *target's* title, not the work item's. Match on the subject's
 `rdf:about`, as with ETM's test plans (quirk 19's note on embedded sub-resources).
 
+### 21. Enabling configuration management moves incoming links out of the resource
+
+On a **non-configuration-enabled** project area, a cross-application link is stored in both
+directions: writing `oslc_cm:implementsRequirement` from an EWM work item to a DOORS Next requirement
+leaves a **backlink in DOORS Next**, readable straight off the requirement's own representation.
+
+**Enable configuration management and those stored backlinks are dropped.** The forward link remains
+on the EWM work item; the incoming direction is no longer in the DOORS Next resource at all, and is
+reached instead by querying **LQE** (the Lifecycle Query Engine).
+
+This is a sound design — under configuration management a backlink would have to be version- and
+stream-scoped, and an incoming link is a *question about a configuration* rather than a fact about a
+resource — but it has a sharp consequence for any client.
+
+**What breaks, and it breaks quietly.** Code that finds incoming links by reading the target's
+representation works perfectly on a non-configuration-enabled project area and returns **nothing** on
+a configuration-enabled one. No error, no warning: the requirement simply appears to have no incoming
+links, exactly as if none had ever been created. That is the same failure shape as an ignored query
+filter — a correct-looking answer that is wrong.
+
+**So do not read incoming links off the resource.** Ask LQE, or a link index, from the start. A client
+that does this from the beginning behaves identically before and after configuration management is
+enabled; one that reads the representation has a latent failure that surfaces on the day someone
+turns configurations on — long after the code was written and tested.
+
+**Verification that counts incoming links is affected too.** A check that passes today against a
+non-configuration-enabled project area will pass for the wrong reason and then fail silently later.
+Verify through the same query path the eventual client will use.
+
 ## Still unknown
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
