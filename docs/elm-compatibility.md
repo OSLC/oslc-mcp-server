@@ -575,6 +575,34 @@ settle most of them.
 > says the baseline was paged. **A working filter was one step from being published as a product
 > defect** — which is why the probe's own results are worth suspecting before a server's.
 
+### 20. `oslc:readOnly` is unreliable in both directions on EWM
+
+Measured 2026-08-28 against EWM, project area `Acme AEB-200 (Change Management)`.
+
+Two properties, both declared `oslc:readOnly true` on the same work-item shape, behave oppositely:
+
+| Property | Declared | Write attempt | Effect |
+|---|---|---|---|
+| `oslc_cm:status` | `readOnly true` | `PUT` answers **200** | **Discarded.** The state does not change (quirk 18) |
+| `oslc_cm:relatedArchitectureElement` | `readOnly true` | `PUT` answers **200** | **Applied.** The link is present on read-back |
+
+So `readOnly` predicts nothing on its own here: honouring it loses a link that would have been
+written, and ignoring it silently loses a state that would not. Both answer `200`.
+
+**The only reliable test is the read-back.** Write it, read it, and compare — for the property you
+sent. That is the same rule as for an ignored query parameter, applied to the write path: a `2xx` is
+not evidence that anything happened, and neither is the shape's own declaration.
+
+**Practically:** treat `oslc:readOnly` as a *hint that the write may not take*, not as a prohibition
+and not as a guarantee. Where a property matters, verify it. Where a client generates a form or a
+tool schema from a shape, `readOnly` is still the right thing to honour — but a client staging data
+should check rather than assume.
+
+**A second thing this exposed.** Writing `relatedArchitectureElement` causes EWM to **embed the target
+resource** in the work item's own representation. A client reading `dcterms:title` from the first
+matching element then reads the *target's* title, not the work item's. Match on the subject's
+`rdf:about`, as with ETM's test plans (quirk 19's note on embedded sub-resources).
+
 ## Still unknown
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
