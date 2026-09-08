@@ -1,6 +1,8 @@
 # Using `oslc-mcp-server` with IBM ELM
 
-Findings from running `oslc-mcp-server` against an **IBM ELM 7.1 SR1** deployment — DOORS Next (`/rm`), ETM (`/qm`) and EWM (`/ccm`) — in August 2026.
+Findings from running `oslc-mcp-server` against an **IBM ELM 7.1 SR1** deployment — DOORS Next (`/rm`), ETM (`/qm`) and EWM (`/ccm`) — in August 2026, and against **Rhapsody Systems Engineering** (`restapi 1.88.3-release18.4`) in September 2026, the latter through a staging run that created 22 model elements with documentation and a three-level containment hierarchy.
+
+Quirks 1–22 cover DOORS Next, ETM and EWM. **RSE is a different shape of server** and has [its own section](#rhapsody-systems-engineering-rse) with quirks 23–38 — it presents two APIs over one model, authenticates with a pre-issued token, and hides its element-creation semantics behind two validation errors that both point the wrong way.
 
 Most of what follows is not specific to this MCP server. It is how ELM behaves as an OSLC provider, and several of the quirks below cost real time to diagnose because **they fail silently rather than with an error**. Published in the hope it saves someone else that time.
 
@@ -698,7 +700,661 @@ workflow.
 
 [actions]: https://docs.oasis-open-projects.org/oslc-op/actions/v1.0/
 
+---
+
+## Rhapsody Systems Engineering (RSE)
+
+Findings from an **RSE `restapi 1.88.3-release18.4`** deployment (`GET ${rse}/api/about` reports the
+version), September 2026. RSE replaces the Rhapsody Model Manager / Design Manager role in an ELM
+lifecycle: it holds SysML v2 models in its own repository with its own configurations, rather than
+storing model files in EWM SCM.
+
+RSE is a **different shape of server** from DOORS Next, ETM and EWM, and the difference is the first
+thing to internalise: it presents **two APIs over one model**.
+
+| | SysML v2 services API | OSLC Architecture Management |
+|---|---|---|
+| Base | `${rse}/api/projects/…` | `${rse}/api/oslc_am/…` |
+| Representation | plain JSON (OMG abstract syntax) | RDF — RDF/XML, Turtle, JSON-LD |
+| Standard | OMG *Systems Modeling API and Services* | OSLC Core 2.0 + AM 2.0 |
+| Read | full model graph, commit-scoped | thin OSLC resource view |
+| **Create** | **yes** — `POST /commits`, no `identity`; any metaclass (quirk 28) | yes, creation factory, but a metaclass allow-list applies (quirk 30) |
+| **Update** | yes, via `POST /commits`; produces a commit | yes, `PUT`, whole-resource only |
+| Links | none | `jazz_am` link predicates |
+| Documentation bodies | yes | no — see quirk 26 |
+
+**Author through `POST /commits`.** It creates, updates and deletes any metaclass, produces real
+version history, and its elements are OSLC AM resources anyway — so the AM factory is a convenience
+with fewer capabilities, not a necessary half of the story. The recipe is at the end of this section.
+
+> **This corrects an earlier reading of this section.** It first concluded that creation was
+> impossible through the SysML v2 API and that authoring therefore required both APIs together. That
+> was wrong: a create omits `identity`, and nothing about the metamodel's complexity was the obstacle
+> — a validation message was mistaken for a capability limit. The AEB-200 dataset was staged the long
+> way round before this was understood, which is why quirks 29–31 describe factory behaviour in such
+> detail. That detail still applies to anyone using the factory; it is no longer the recommended path.
+
+---
+
+### What works
+
+| | |
+|---|---|
+| **Authentication** | A **pre-issued API token** sent as `Authorization: Bearer <token>`. The raw token with no `Bearer` prefix is also accepted. See quirk 25 — the challenge cannot be negotiated |
+| **Catalog discovery** | `GET ${rse}/api/rootservices` — **unauthenticated (200)**, so discovery bootstraps before credentials |
+| **Domains advertised** | `oslc_am:amServiceProviders` → `/api/oslc_am/catalog`, and `oslc_config:cmServiceProviders` → `/api/oslc_config/catalog` |
+| **Service providers** | One AM service provider per RSE project: `/api/oslc_am/{projectId}/services.xml` |
+| **Creation factory** | `/api/oslc_am/{projectId}/resource`, shape at `…/shape/creation` |
+| **Query capability** | Same base URI as the factory, shape at `…/shape/query`; `jp:supportOSLCSimpleQuery` is `true` |
+| **Dialogs** | Both selection and creation dialogs are published — delegated-UI link creation works |
+| **Configurations** | A full OSLC Config implementation — an RSE project is an `oslc_config:Component`, a branch is a `Stream`, a tag is a `Baseline`. `jp:globalConfigurationAware` is `yes` on the **AM** provider, so an RSE project can contribute to a global configuration and GCM/CDCM can resolve versioned links through it. See *The OSLC Configuration Management surface* |
+| **Content negotiation on GET** | Genuine: RDF/XML, Turtle, JSON-LD and JSON each return 200 with the matching `Content-Type` |
+| **Full CRUD on AM resources** | `POST` to the factory, `GET`, `PUT`, `DELETE` — all verified |
+| **Element create/update/delete** | `POST /commits`, any metaclass, real version history — the recommended authoring path (quirk 28) |
+| **Project create/delete** | `POST`/`DELETE` `/api/projects` — 201 and 200. Unlike element deletion, project deletion is reliable, which makes a throwaway project the safe place to iterate |
+| **Branch operations** | `POST /api/projects/{p}/branches` → 201, `DELETE` → 200 |
+
+Link predicates offered by the AM creation shape, all `Zero-or-many` with `oslc:Resource` values, in
+`http://jazz.net/ns/dm/linktypes#`: `derives`, `satisfy`, `refine`, `trace`,
+`tracksArchitectureElement`, `realizesArchitectureElement`, `allocatesArchitectureElement`.
+
+---
+
+### 23. Discovery lives under `/api`, and the conventional path 404s
+
+`GET ${rse}/rootservices` returns **404** — and not a useful one: it serves the web application's
+HTML shell, so a client that does not check the content type will try to parse a Next.js page as RDF.
+The document is at **`${rse}/api/rootservices`**.
+
+For `oslc-mcp-server`'s `${baseUrl}/rootservices` convention this means **`baseUrl` must include
+`/api`**:
+
+```yaml
+  - alias: rse
+    baseUrl: https://rse.example.com/api      # not …/ , not the web root
+```
+
+`catalog-resolution.ts` already lists `http://open-services.net/ns/am#amServiceProviders`, which is
+the predicate RSE publishes, so no catalog changes are needed. `oslc_config#cmServiceProviders` is
+deliberately excluded there and should stay excluded — it is a configuration catalog, not a domain
+catalog.
+
+### 24. The AM namespace ships with a placeholder prefix name
+
+The service provider's own `oslc:prefixDefinition` binds `http://jazz.net/ns/am#` to the prefix
+**`newProductAcronym`**, and every response uses it:
+
+```turtle
+newProductAcronym:type "PartDefinition" ;
+```
+
+It is an unfinished rename that shipped. It is only a label — the namespace URI is correct and
+stable — but **do not key anything off the prefix string**. Bind `http://jazz.net/ns/am#` to your own
+prefix and ignore what the server calls it.
+
+Note also that the shape's link predicates are in a *different* namespace,
+`http://jazz.net/ns/dm/linktypes#`, which the same document binds to `jazz_am`. So `jazz_am:trace` is
+a linktype and `jazz_am:type` — as most code will write it — is not; the latter is
+`newProductAcronym:type` in RSE's own vocabulary. Two namespaces, easily conflated.
+
+### 25. Authentication is a pre-issued token, and the challenge cannot be negotiated
+
+An unauthenticated request answers:
+
+```
+HTTP/1.1 401
+www-authenticate: OAuth realm="SysML"
+```
+
+Bare OAuth 1.0a, **with no `token_uri` parameter**. That defeats every rung of a conventional auth
+ladder: JEE forms never triggers (no `authrequired` message), a JAS bearer flow skips (it needs
+`token_uri=` in the challenge), Basic auth answers 401 — confirmed with valid-username/wrong-password —
+and interactive SSO has nowhere to go.
+
+The working scheme is a token issued out of band and presented on every request:
+
+```
+Authorization: Bearer <token>
+```
+
+Two consequences for a client:
+
+- **A token must be configured, not acquired.** There is no credential exchange to implement.
+- **A 401 must be terminal when a token is configured.** Letting it fall into a negotiation ladder
+  produces a misleading cascade of failures for what is really "the token expired". The tokens
+  observed carry a **24-hour** lifetime (`exp` = `iat` + 86400), so expiry mid-session is a routine
+  event, not an edge case.
+
+`rootservices` is readable without any credential, so discovery can start before the token is checked.
+
+### 26. The AM resource shape is thin, and everything outside it is discarded silently
+
+The complete set of properties RSE will store on an AM resource, from `…/shape/creation` and
+`…/shape/resource`:
+
+| Property | Occurs | Notes |
+|---|---|---|
+| `dcterms:title` | `Exactly-one` | `rdf:XMLLiteral` |
+| `newProductAcronym:type` (`ns/am#type`) | `Exactly-one` | plain string, **no enumerated allowed values** |
+| `oslc:shortTitle` | `Zero-or-one` | persists — the one spare text slot |
+| `ns/am#owningRelatedElementId` | `Zero-or-one` | set by the server, see quirk 30 |
+| the seven `linktypes#` predicates | `Zero-or-many` | |
+| `dcterms:identifier`, `dcterms:modified`, `oslc:instanceShape`, `oslc:serviceProvider`, `rdf:type` | | server-assigned, resource shape only |
+
+**There is no `dcterms:description`, in either shape.** Sending one returns **201 / 200** and the
+property is simply absent from the read-back. The same is true of `rdfs:comment` and of any custom
+predicate. This is the ELM silent-failure pattern again, on a different product: *accepted, no error,
+nothing there.*
+
+So **read every AM resource back and check the properties you sent are present.** A `201` is not
+evidence that anything but `dcterms:title` and the type survived.
+
+Descriptions are not lost, though — they belong in a SysML `Documentation` element, which is the
+semantically correct home and is reachable through the other API. See the recipe below. Ideally IBM would map dcterms:description to the SysML Documentation element. as part of the OSLC representation transformation.
+
+### 27. Writes require RDF/XML or Turtle — JSON-LD is read-only
+
+`GET` honours four representations. **Write does not.**
+
+| | RDF/XML | Turtle | JSON-LD / JSON |
+|---|---|---|---|
+| `POST` to creation factory | **201** | **201** | **500** |
+| `PUT` an existing resource | **200** | **200** | **500** |
+| `GET` | 200 | 200 | 200 |
+
+The JSON-LD failure is at least loud, and the message is worth recognising because it does not
+mention content types at all:
+
+```
+error creating OSLC Architecture Management resource -
+Invalid request content: Missing OSLC Architecture Management resource
+```
+
+That reads like a malformed body. It is a rejected serialization.
+
+**`PUT` cannot create.** A `PUT` to a resource URI that does not exist returns 500 and the URI stays
+404 — there is no PUT-to-create. Creation is the factory, and only the factory.
+
+### 28. All element writes go through `POST /commits` — and a create omits `identity` entirely
+
+There are no element write endpoints. These are all **404, not 405** — absent rather than disallowed,
+which matches IBM documenting element access as read-only:
+
+```
+PUT  /api/projects/{p}/elements/{id}
+POST /api/projects/{p}/elements
+PUT  /api/projects/{p}/commits/{c}/elements/{id}
+POST /api/projects/{p}/commits/{c}/elements
+PUT  /api/projects/{p}/branches/{b}/elements/{id}
+```
+
+The one write door is `POST /api/projects/{p}/commits?branchId={b}`, and it does **create, update and
+delete** — the standard `DataVersion` semantics of the OMG *Systems Modeling API and Services*, which
+RSE implements faithfully. The three forms differ only in `identity`:
+
+| Operation | `identity` | `payload` |
+|---|---|---|
+| **create** | **omitted entirely** | the new element |
+| **update** | `{"@id": "<existing id>"}` | the changed properties, with `@id` |
+| **delete** | `{"@id": "<existing id>"}` | `null` |
+
+```json
+{ "@type": "Commit",
+  "change": [ { "@type": "DataVersion",
+                "payload": { "@type": "PartDefinition",
+                             "declaredName": "Sensor Fusion",
+                             "declaredShortName": "CMP-SF" } } ] }
+```
+
+→ **201**, a new `Commit`, the branch head advances, and the element is real.
+
+> **⚠ The trap, and it is a costly one.** Sending `identity` as an *empty object* is rejected with
+> `"change[0].identity.@id" is required`, which reads like "identity is mandatory". Supplying a
+> freshly generated UUID there is then treated as an **update** to an element that does not exist:
+>
+> ```
+> error when merging commits - this commit contains an element in the "update" array that
+> does not exist for this configuration. elementId: "<the id you just generated>"
+> ```
+>
+> Both errors point away from the answer, which is to omit the key. Nine payload variants were tried
+> before the OMG API Cookbook's
+> [`Element_Create_Update_Delete.ipynb`][cookbook] settled it. **When this API's semantics are
+> unclear, read the cookbook rather than inferring from error messages** — they describe what the
+> validator wanted, not what the operation needs.
+
+**Everything is creatable this way.** Unlike the OSLC AM creation factory, which enforces a
+metaclass allow-list (quirk 30), `POST /commits` accepts any metaclass — including the specialised
+memberships that a connected architecture requires and the factory refuses:
+`FeatureMembership`, `EndFeatureMembership`, `PortUsage` with a `direction`. **A client that needs to
+build real SysML structure should create through commits and ignore the factory entirely.**
+
+**Commit-created elements are still OSLC AM resources.** They appear in the AM query base with the
+right `newProductAcronym:type` and are linkable with the `linktypes#` predicates, so choosing the
+commit route costs nothing on the OSLC side. Memberships are correctly *not* exposed as AM resources
+— they are model mechanics rather than architecture resources.
+
+Mechanics worth knowing:
+
+- **`name` is accepted and silently ignored.** The cookbook's examples use `"name"`; RSE stores
+  nothing and the element reads back with `declaredName: ""`. Use **`declaredName`**, and
+  `declaredShortName` for a short name. This is a conformance gap against the cookbook and worth
+  reporting.
+- On an update, the `elementId` is taken from **`payload.@id`** (or `payload.elementId`), not from
+  `identity.@id`. Both are validated; only the payload's is used.
+- **`previousCommit` and `owningProject` are rejected** in the commit body —
+  `"previousCommit" is not allowed` — even though the cookbook sends `previousCommit`. Use the
+  `?branchId=` query parameter instead.
+- **Derived properties are rejected**, not ignored. Setting `documentation` on an element, or
+  `annotatedElement` on a `Documentation`, fails validation. Express them through containment
+  (quirk 30).
+- Batch aggressively: `change` takes many `DataVersion` entries, so a whole subgraph — element,
+  its `Documentation`, and the membership joining them — commits atomically in one call.
+
+[cookbook]: https://github.com/Systems-Modeling/SysML-v2-API-Cookbook
+
+### 29. An AM-created element is real, but invisible to commit-scoped reads until a commit touches it
+
+This one cost the most time to understand, and produced a wrong conclusion on the way.
+
+Create an element through the AM factory, then `GET` it through the SysML v2 API at the branch head.
+The response is **200** with:
+
+```json
+{ "@type": "UnknownElement",
+  "declaredName": "UnknownElement_<id>",
+  "reason": "ERROR in getObjectByID = Error: Unable to find element with id = <id>" }
+```
+
+The natural reading — that AM creates produce something other than model content — is **wrong**. The
+element exists in the configuration's *live* state; it is simply in no commit yet, and the SysML v2
+API reads are commit-scoped. Note the tell in quirk 28's error text: *"does not exist for this
+**configuration**"*, not "for this commit".
+
+Send any `POST /commits` update naming that element and it succeeds, the branch head advances, and
+the element then reads back as a fully typed, committed SysML element:
+
+```json
+{ "@type": "PartDefinition", "declaredName": "…", "projectId": "…" }
+```
+
+Two things follow. **`newProductAcronym:type` genuinely sets the SysML metaclass** — the element came
+back as a `PartDefinition`, not a generic resource. And **content authored this way does land inside
+RSE configurations**, so it can be baselined; it just needs one commit to get there.
+
+The practical trap: a 200 carrying `@type: "UnknownElement"` is a *failed* lookup wearing a success
+code. Check `@type` and `reason`, never the status.
+
+### 30. Containment: the factory auto-parents to root, and memberships are re-pointed, not created
+
+Every AM factory create silently makes an `OwningMembership` from the project's **root package** to
+the new element, and reports it as `ns/am#owningRelatedElementId`. You do not choose the parent.
+
+Building a real hierarchy therefore means moving elements after the fact, and the only way to do that
+is to update the auto-created membership:
+
+- **The factory cannot create a membership** — but `POST /commits` can (quirk 28), which is the way
+  out of everything below. `newProductAcronym:type "OwningMembership"` through the factory returns
+  **500** with `Property 'newProductAcronym:type' value 'OwningMembership' is not supported`;
+  `FeatureMembership`, `EndFeatureMembership`, `ParameterMembership` and `ViewRenderingMembership` are
+  refused the same way, while plain `Membership` is accepted. **This allow-list constrains the factory
+  only.**
+  `Annotation` and `Comment`, despite also being relationship-ish, *are* accepted. **Check every
+  metaclass you intend to use against the factory before planning around it.** Verified accepted:
+  `PartDefinition`, `PartUsage`, `InterfaceDefinition`, `InterfaceUsage`, `PortUsage`, `Documentation`,
+  `Comment`, `Annotation`.
+- **You can re-point the one you were given** — `POST /commits` updates it.
+
+**Re-parenting is four writes, not one**, and the last two are the ones that get missed:
+
+1. the membership's `owningRelatedElement` → the new parent;
+2. the membership's `ownedRelatedElement` → the child;
+3. **add the membership to the new parent's `ownedRelationship`**;
+4. **remove it from the old parent's `ownedRelationship`**.
+
+Steps 3 and 4 are not derived (quirk 31), and the factory has *already* put every new membership in
+the root package's list — so after a bulk re-parent the root still claims everything. In one staging
+run of 22 elements the root package listed 57 relationships of which **36 were stale**, all pointing
+at memberships that now belonged to other parents. Nothing errors; the model is simply wrong in a way
+only a walk of both directions detects.
+
+### 31. Derived and inverse properties do not recompute in the element `GET`
+
+After re-pointing a membership so that element `X` owns element `D`, the membership reads correctly —
+but `X` still reports:
+
+```json
+"ownedRelationship": [],
+"documentation": null
+```
+
+The stored, authoritative direction is on the **relationship**, not on either end. This is the same
+principle the OSLC side of a traceability graph obeys — the inverse is a query, not a stored triple —
+but here it bites within a single API, on properties the OMG abstract syntax presents as if they were
+plain fields.
+
+**Write verification queries against the relationship elements**, not against an element's derived
+lists, or they will report failures that are not real.
+
+**And write the forward list anyway.** The consequence that cost the most time here: the *UI* reads the
+forward `ownedRelationship`, so a membership whose two ends are correct but which no parent lists is
+invisible on screen while reading back perfectly through the API. That is how 22 correct-looking
+descriptions can be staged and none of them appear. Set both directions, always, and verify both.
+
+### 32. Smaller sharp edges
+
+- **No `ETag` is served** on AM resources, and `PUT` succeeds with an absent *or empty* `If-Match`.
+  There is no optimistic concurrency control to rely on. A client that sets `If-Match` unconditionally
+  from an empty string happens to work — by luck, not contract.
+- **Validation errors arrive as `500`**, not `400`, on the SysML v2 side. The body is informative;
+  the status is not.
+- **A `PUT` carrying non-shape predicates can strand a resource permanently.** After one `PUT`
+  including `rdfs:comment` and a custom predicate, `DELETE` returned
+  `500 "A sysml-server internal error has occurred"` on every subsequent attempt, including after a
+  repair `PUT` restoring shape-only properties. A resource created and left alone deletes cleanly
+  (200, then 404). **Send only shape properties** — quirk 26 says they are dropped, and this says the
+  dropping is not free.
+- **A fresh RSE project is not empty.** A newly created project already carries a root `Package`, six
+  `ViewUsage` elements, library `NamespaceImport`s and assorted stubs — 27 AM resources / 35 SysML
+  elements in the one observed. Any "expect *N* resources" verification must account for the
+  boilerplate or filter by title.
+- **A branch is what the UI calls a configuration.** The `?configuration={uuid}` parameter in an RSE
+  project URL is a branch id.
+- **The OSLC Query API of the SysML v2 spec is absent.** `/api/projects/{p}/queries` is 404 on both
+  `GET` and `POST`. Page `…/elements` or use the OSLC AM query capability instead.
+
+---
+
+### The OSLC Configuration Management surface
+
+RSE implements OSLC Config properly, and this is the most encouraging part of the product's OSLC
+story — it means **GCM and CDCM can consume RSE local configurations and use them to resolve versioned
+links**, and a global baseline can be staged and committed by delegating to RSE as a contributor
+rather than by any RSE-specific mechanism.
+
+The mapping onto RSE's own vocabulary:
+
+| RSE concept | OSLC Config resource | URI |
+|---|---|---|
+| project | `oslc_config:Component` | `/api/oslc_config/component/{projectId}` |
+| branch (the `?configuration=` parameter) | `oslc_config:Stream` | `/api/oslc_config/{projectId}/stream/{branchId}` |
+| tag | `oslc_config:Baseline` | `/api/oslc_config/{projectId}/baseline/{tagId}` |
+
+A `Stream` reads back as both `oslc_config:Configuration` and `oslc_config:Stream`, and carries
+`oslc_config:component`, `oslc_config:baselines`, `process:projectArea` and a title — everything a
+global configuration needs from a contribution.
+
+The service provider is **server-wide, not per project**: one `/api/oslc_config/services.xml` for the
+whole deployment, publishing creation factories for `Component`, `Stream` and `Baseline`, a query
+capability for each, and a **configuration selection dialog** typed for `Baseline`, `Stream` and
+`Configuration` — which is the delegated UI a global configuration editor uses to pick a contribution.
+
+The baseline creation shape is small and, notably, **does** allow a description where AM resources do
+not (quirk 26):
+
+| Property | Occurs |
+|---|---|
+| `dcterms:title` | `Zero-or-one` |
+| `dcterms:description` | `Zero-or-one` |
+| `oslc_config:component` | `Exactly-one` |
+| `oslc_config:baselineOfStream` | `Zero-or-many` |
+
+**Do not misread `jp:globalConfigurationAware`.** The *config* service provider declares `no`; the
+*AM* service provider declares `yes`. That is the normal arrangement — the flag answers "does this
+domain provider participate in global configurations", and the configuration provider is the thing
+being contributed, not a contributor. A client that checks the wrong one concludes RSE cannot take
+part.
+
+### 33. The config query bases require `oslc.where`, and say so with a 500
+
+`GET /api/oslc_config/component` works and lists every project. Its siblings do not:
+
+| Query base | Bare `GET` |
+|---|---|
+| `…/oslc_config/component` | **200**, `oslc:totalCount` and members |
+| `…/oslc_config/stream` | **500** `Input validation error: "oslc.where" is required` |
+| `…/oslc_config/baseline` | **500** `Input validation error: "oslc.where" is required` |
+
+Three query capabilities are advertised identically and one behaves differently — the same pattern as
+quirks 6 and 19 on the ELM applications, where advertised query capability says nothing about actual
+query behaviour. **Measure each capability separately.**
+
+Reaching a project's configurations does not need the query bases at all, and is more reliable:
+`GET` the component, follow `oslc_config:configurations` to an LDP `BasicContainer`, and read
+`ldp:contains`.
+
+### 34. A fresh project advertises a baseline that does not exist
+
+The configurations container of a newly created project lists two members — its stream, and a baseline
+whose id is the project's **initial commit**:
+
+```turtle
+n0:configurations a oslc_config:Configurations, ldp:BasicContainer ;
+    ldp:contains
+        bas:bcd3f3a2-…,      # the initial commit id
+        str:48243351-… .     # the default branch
+```
+
+The stream resolves. **The baseline does not:**
+
+```
+GET /api/oslc_config/{projectId}/baseline/bcd3f3a2-…
+→ 404   <oslc:message>Tag not found</oslc:message>
+```
+
+The stream's own `oslc_config:baselines` container repeats the same phantom member. Consistent with
+it, `GET /api/projects/{p}/tags` returns `[]` — there is genuinely no tag. An RSE baseline **is a
+tag**, and a commit is not one, but the container is populated as though every commit were.
+
+So a client enumerating a component's configurations must **tolerate a dangling member**. Fetch each
+one and skip what 404s, rather than trusting the container. Worth knowing before concluding that a
+project's baseline has been deleted or that permissions are wrong: on a fresh project this phantom is
+the expected state, not a symptom.
+
+---
+
+### 35. The web UI works on a private branch, and the API does not know
+
+This is the one to internalise before comparing anything you wrote with anything you see.
+
+Opening a project in the RSE web UI puts the user on a **private branch**, created on the spot and
+named `Private-01`, `Private-02`, …:
+
+```
+GET /api/projects/{p}/branches
+  48243351…  main        isDefault=true   isPrivate=false
+  53d0868f…  Private-01  isDefault=false  isPrivate=true
+```
+
+Edits made in the UI land there, not on `main`, and are promoted only by the UI's **Commit to main**.
+Meanwhile an API client writing to `main` is invisible to that session. The two views diverge silently
+and *completely plausibly* — each side sees a coherent model that simply lacks the other's changes.
+
+Three practical consequences:
+
+- **A UI edit produces no commit on `main` and no new AM resource.** Searching every element at
+  `main`'s head for text typed into the UI returns nothing. That looks exactly like a failed save.
+- **Confirming API-written content in the UI requires the user to be on a branch that has it** — either
+  `main` before their private branch was cut, or after an explicit switch.
+- **A private branch left holding uncommitted edits is a trap for later.** Discard it, or it may
+  promote stale content over the top of staged work.
+
+The private branch is also why the AM factory needs no branch parameter: it writes to the default
+branch. There is no way to aim an AM create at a specific branch.
+
+### 36. `DELETE` cascades in live state, and live state diverges from committed state
+
+Quirk 29 established that AM-created elements sit in live state until a commit promotes them. The
+reverse is worse.
+
+Deleting an AM resource **also destroys whatever that resource owns, in live state only**. Deleting an
+`Annotation` that owned a `Documentation` removed the `Documentation` too — while the committed state
+at the branch head still contained both, and still contained the commits that had re-owned the
+`Documentation` elsewhere. From that point the two stores disagreed permanently:
+
+| | live (OSLC AM) | committed (SysML v2 at head) |
+|---|---|---|
+| the `Documentation` | gone — `GET` → 404 | present, with its body |
+| the memberships that referenced it | gone | present |
+
+A `POST /commits` update naming an element that live state has lost fails with the same
+`UNKNOWN_ELEMENT` as an attempted create (quirk 28) — so **once the stores diverge, the committed copy
+can no longer be repaired through the commit API**. There is no reconciliation operation.
+
+### 37. One dangling reference returns 500 for the *entire* AM query base
+
+The consequence of quirk 36, and it is disproportionate. After a cascade delete left the root package
+listing a membership that no longer existed in live state:
+
+```
+GET /api/oslc_am/{project}/resource
+→ 500   <oslc:message>A sysml-server internal error has occurred</oslc:message>
+```
+
+Not the affected resource — **every** resource. Individual `GET`s on unrelated resources still
+returned 200, and the SysML v2 side was entirely healthy, so the failure looks like an outage of the
+AM domain rather than one bad row. The query base stayed 500 until the dangling entry was removed from
+the root package's `ownedRelationship` by a `POST /commits` update; it then returned 200 immediately.
+
+**Diagnosis path**, since the error says nothing useful: walk the root package's `ownedRelationship`
+and `GET` each member at the branch head. A dangling one comes back as `@type: "UnknownElement"` with a
+`reason` (quirk 29's trap, used here as a tool). Remove those entries and the query base recovers.
+
+Before staging content in bulk, it is worth confirming the query base answers 200 — a staging run that
+begins against a broken one will fail confusingly on its first read.
+
+### 38. Deletion is a trap at both ends, and elements become permanently undeletable
+
+`DELETE` on a cleanly created, untouched AM resource works: 200, then 404. Beyond that:
+
+- **Deleting an element still referenced by its parent's `ownedRelationship` strands the reference** and
+  triggers quirk 37.
+- **Detaching it from its parent first makes the `DELETE` itself fail** with 500. There is no ordering
+  that is safe by construction; detach-then-delete and delete-then-repair both leave work to do.
+- **Elements that have been through several commits stop being deletable at all.** Repeated `DELETE`
+  returns `500 A sysml-server internal error has occurred` indefinitely, and a repair `PUT` restoring
+  shape-only properties does not help. Two separate elements reached this state in testing, one after a
+  `PUT` carrying non-shape predicates (quirk 32) and one after roughly a dozen commits. Both had to be
+  removed through the web UI, which succeeded where the API could not.
+
+The practical rule: **treat API-created RSE content as append-only.** Stage into a throwaway project
+until the script is proven, keep the staging script idempotent so a partial run can be re-run rather
+than unwound, and expect the web UI to be the cleanup tool of last resort.
+
+---
+
+### Recipe: creating a typed, documented, correctly-parented element
+
+**One commit.** `POST /api/projects/{p}/commits?branchId={b}` with three `DataVersion` entries, none
+carrying `identity`:
+
+```json
+{ "@type": "Commit",
+  "description": "AEB-200: the fused object list interface",
+  "change": [
+    { "@type": "DataVersion",
+      "payload": { "@type": "InterfaceDefinition",
+                   "declaredName": "Fused Object List Interface",
+                   "declaredShortName": "IFC-SF-TA" } },
+    { "@type": "DataVersion",
+      "payload": { "@type": "Documentation",
+                   "body": "Carries the fused object list — tracks with position, …" } },
+    { "@type": "DataVersion",
+      "payload": { "@type": "OwningMembership", "visibility": "public" } }
+  ] }
+```
+
+Read the new head's elements once to learn the three assigned ids, then a second commit wires them —
+the membership's two ends, and the element's forward `ownedRelationship`:
+
+```json
+{ "@type": "Commit",
+  "change": [
+    { "@type": "DataVersion", "identity": { "@id": "<membership>" },
+      "payload": { "@type": "OwningMembership", "@id": "<membership>", "visibility": "public",
+                   "owningRelatedElement": { "@id": "<element>" },
+                   "ownedRelatedElement": [ { "@id": "<documentation>" } ] } },
+    { "@type": "DataVersion", "identity": { "@id": "<element>" },
+      "payload": { "@type": "InterfaceDefinition", "@id": "<element>",
+                   "declaredName": "Fused Object List Interface",
+                   "declaredShortName": "IFC-SF-TA",
+                   "ownedRelationship": [ { "@id": "<membership>" } ] } }
+  ] }
+```
+
+**The structure RSE itself builds** for a description — read back from an element the UI had described,
+which is the only reliable way to learn it:
+
+```
+Element.ownedRelationship ──> OwningMembership (visibility: "public")
+                                ├─ owningRelatedElement ──> Element
+                                └─ ownedRelatedElement  ──> Documentation { body }
+```
+
+No `Annotation` is involved. `Documentation.annotatedElement` is derived and cannot be written — it is
+rejected both as an array (`Expected type "ElementRef" to be an object`) and as an object
+(`wrong format of property annotatedElement`).
+
+**Both directions are required.** Set the membership's ends and *not* the element's
+`ownedRelationship`, and the description exists in the API, reads back perfectly, and is **invisible in
+the UI** — the UI trusts the forward list (quirk 31). That is how 22 correct-looking descriptions can be
+staged and none appear.
+
+**Batch, and order by dependency.** `change` takes many entries, so a whole hierarchy can be created in
+one commit and wired in a second. Only two round trips are needed regardless of size: create
+everything, read the head once to map ids, wire everything.
+
+**Wider structure** — ports, connected interfaces, typed usages — needs metaclasses the AM factory
+refuses and `POST /commits` accepts:
+
+| To express | Create |
+|---|---|
+| a port on a definition | `PortUsage` (with `direction`), owned via a `FeatureMembership` |
+| a usage typed by a definition | `FeatureTyping` with `type` + `typedFeature`, owned by the usage via `owningRelatedElement` |
+| an interface joining two ports | `InterfaceUsage` owning two `EndFeatureMembership`s, plus a `FeatureTyping` to the `InterfaceDefinition` |
+
+RSE's own models use exactly these, and reading one is the fastest way to get the shape right:
+`GET` an `InterfaceUsage` the UI built and walk its `ownedRelationship`.
+
+#### If you use the AM creation factory instead
+
+It works and it is simpler for flat content, at the cost of two limitations: the **metaclass
+allow-list** (quirk 30) and **auto-parenting to the root package**, which every re-parent then has to
+undo. The AEB-200 dataset was staged this way before commit-create was understood, in five phases:
+create each element and its `Documentation` via the factory; one commit for names and bodies; read the
+head to resolve the auto-created memberships; one commit re-pointing them; one commit setting every
+forward list *and recomputing the root package's* — because the factory has already added all 44
+memberships there, and a union leaves 36 stale.
+
+Never replace the root package's list wholesale either: it carries the project's own boilerplate, and a
+fresh project has 13 relationships holding six library imports, six views, and the `action1`/`state1`
+stubs that back two of those views.
+
+**Verify all three, on the relationships and not the elements:** the metaclass on each element, exactly
+one `Documentation` with a non-empty `body` reachable through an owned membership, and containment
+matching in *both* directions.
+
+Links between AM resources are written on the AM side, in RDF, using the `linktypes#` predicates listed
+at the end of *What works* above. `PUT` the whole resource — there is no partial update, so a link write
+means `GET`, add the link, `PUT` back, sending **only** shape properties (quirk 32).
+
+---
+
 ## Still unknown
+
+### RSE
+
+- ~~**Whether the RSE web UI renders elements created through the AM factory**~~ — **answered: yes, fully.** Verified on a 22-element staging run viewed on `main`: elements appear in the model browser with the correct icons, the properties panel reports the right metaclass (`Display element type: Part definition` / `Interface definition`), `declaredName` and `declaredShortName` round-trip, nesting displays to three levels, and **the Description field is populated from the `Documentation` body**. Documentation was the hard part and is what produced quirks 30, 31 and 35 — the structure in the recipe is what the UI itself builds. **Placing such an element on a diagram is still untested.**
+- **Whether the UI will edit, and not merely display, API-created elements.** Not the same question: a UI edit lands on a private branch (quirk 35), so the round trip back to `main` has not been exercised.
+- **Whether RSE supports importing SysML v2 textual notation** at all, and if so through what surface. No API endpoint for it exists (`/imports`, `/import`, `/textual` are all 404), and `Accept: text/plain` and `text/x-sysml` are ignored on read — the SysML v2 API returns JSON regardless. If the UI can import text, it is the only route to it.
+- **Whether an RSE baseline captures content created via the AM factory but never committed.** Quirk 29 shows one `POST /commits` puts an element into history; what a baseline does with a live-but-uncommitted element is untested.
+- **Whether the `TextualRepresentation` metaclass is usable for model content.** The instances observed all carried RSE's own Harmony/view `__settings` JSON, not SysML notation.
+- ~~**Whether element creation is genuinely unimplemented or a defect**~~ — **answered: neither. It works.** A create omits `identity` entirely, per the OMG cookbook. See quirk 28, and the correction note at the head of this section.
+- **Why `name` is accepted and silently ignored** where the OMG cookbook uses it. A conformance gap worth raising with IBM; `declaredName` is the working property.
+- **Whether the live/committed divergence of quirk 36 is recoverable at all**, by any operation other than deleting the project. Nothing found so far reconciles the two stores.
+- ~~**Whether the stranded-resource failure in quirk 32 is recoverable**~~ — **answered: through the web UI.** The API cannot delete such an element by any route tried, but deleting it in the model browser works. See quirk 38.
+
+### DOORS Next, ETM, EWM
 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
 - ~~**Whether create, update and delete actually work.**~~ — **answered: yes, on all three applications.** See quirk 17. The first attempt failed on all but EWM, for reasons that were entirely administrative (licences, a delete permission) and entirely invisible to discovery.
