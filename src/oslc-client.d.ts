@@ -17,6 +17,8 @@ declare module 'oslc-client' {
 
   export class OSLCClient {
     client: {
+      /** Axios defaults — `headers.common` carries `Configuration-Context`. */
+      defaults: { headers: { common: Record<string, string> } };
       get(url: string, config?: any): Promise<any>;
       post(url: string, data?: any, config?: any): Promise<any>;
       put(url: string, data?: any, config?: any): Promise<any>;
@@ -24,6 +26,13 @@ declare module 'oslc-client' {
     };
 
     constructor(user?: string, password?: string, configurationContext?: string | null);
+
+    /**
+     * The OSLC Configuration-Context URI this client sends, or null. Set at
+     * construction; `set_configuration_context` changes it at runtime, which
+     * must also update `client.defaults.headers.common`.
+     */
+    configuration_context: string | null;
 
     getResource(
       url: string,

@@ -20,9 +20,19 @@
 #
 # ── configurationContext ────────────────────────────────────────────────
 # Required against configuration-enabled ELM project areas: it names the
-# stream or baseline requests resolve against. Set per service provider
-# where a project area works in a specific configuration; the server-level
-# value is the fallback.
+# stream or baseline requests resolve against. Without it the application
+# picks a configuration for you, so a query can look right and be about the
+# wrong stream.
+#
+# Set it at SERVER level, as below. A `configurationContext` under an
+# individual serviceProvider is parsed but NOT applied -- one client serves
+# the whole server entry and sends one Configuration-Context header -- and
+# the server warns at startup if it finds one.
+#
+# It can also be set for a session with the `set_configuration_context` tool,
+# which is how to work in a global configuration the user names at the time,
+# or to switch between them without restarting. `get_configuration_context`
+# reports what is actually being sent.
 #
 # ── credentials ─────────────────────────────────────────────────────────
 # Prefer usernameEnv/passwordEnv, naming environment variables. Literal
@@ -49,20 +59,21 @@ servers:
     credentials:
       usernameEnv: ELM_USER
       passwordEnv: ELM_PASSWORD
+    # Server level -- a configurationContext under a serviceProvider is ignored.
+    configurationContext: https://elm.example.com/gc/configuration/GC_ID
     serviceProviders:
       - uri: https://elm.example.com/rm/oslc_rm/_PROJECT_AREA_ID/services.xml
         alias: requirements
-        configurationContext: https://elm.example.com/gc/configuration/GC_ID
 
   - alias: etm
     baseUrl: https://elm.example.com/qm
     credentials:
       usernameEnv: ELM_USER
       passwordEnv: ELM_PASSWORD
+    configurationContext: https://elm.example.com/gc/configuration/GC_ID
     serviceProviders:
       - uri: https://elm.example.com/qm/oslc_qm/_PROJECT_AREA_ID/services.xml
         alias: test
-        configurationContext: https://elm.example.com/gc/configuration/GC_ID
 
   - alias: ewm
     baseUrl: https://elm.example.com/ccm

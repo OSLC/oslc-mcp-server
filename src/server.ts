@@ -29,6 +29,7 @@ import type { GeneratedTool } from 'oslc-service/mcp';
 import { discover, discoverServiceProvider, ACCEPT_RDF } from './discovery.js';
 import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
+import { resolveConfigurationCatalogUrl } from './catalog-resolution.js';
 import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
 import { DEFAULT_REPORT_PATH } from './config-file.js';
 import { runProbe, type ProbeRun } from './probe/orchestrate.js';
@@ -324,6 +325,46 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'list_configurations',
+    description:
+      'List the configurations a configuration-management server offers, so the user can choose one. Reads whichever configured server advertises a configuration catalog in its rootservices — an ELM GCM or CDCM server — and prefers the GLOBAL configuration catalog, because a global configuration is what spans applications and makes links between versioned requirements, model elements, test cases and work items resolve. Follow with set_configuration_context, normally with allServers:true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        server: {
+          type: 'string',
+          description: 'Alias of the configuration server to read. Omit to search every configured server for one that advertises a configuration catalog.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_configuration_context',
+    description:
+      'Report the OSLC Configuration-Context this server currently sends, and whether one is set at all. Read-only, makes no requests. A configuration-enabled ELM project area resolves every request against a stream or baseline; without a context the server picks one for you, so a query that looks right can be answering about the wrong configuration.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'set_configuration_context',
+    description:
+      'Set or clear the OSLC Configuration-Context sent with every subsequent request, without restarting. Use when the user names a global configuration to work in, or switches to a different one — a global configuration spans several applications, so pass allServers:true to point every configured server at it in one call. Pass an empty uri to clear. The URI is checked for reachability and the result is reported, but it is still applied if unreachable, so a context can be set before its configuration exists.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uri: {
+          type: 'string',
+          description: 'Configuration URI — a global configuration from the GC application, or a local stream/baseline. Empty string clears the context.',
+        },
+        allServers: {
+          type: 'boolean',
+          description: 'Apply to every configured server, not just this one. Use for a global configuration. Default false.',
+        },
+      },
+      required: ['uri'],
+    },
+  },
+  {
     name: 'read_service_provider',
     description:
       'Return one ServiceProvider in the same format as read_catalog — its creation factories, query capabilities, resource types, vocabulary references (oslc:domain), and shape references — fetched on demand from the supplied ServiceProvider URL. Use this when read_catalog returns many ServiceProviders and you want to drill into one without forcing the server to crawl every SP at startup. The shape documents referenced by factories are fetched too; their content can be retrieved with get_resource.',
@@ -358,6 +399,40 @@ const GENERIC_TOOL_NAMES = new Set(GENERIC_TOOLS.map((t) => t.name));
  * Returns undefined against a server that sets no such cookie, where the header
  * is simply not sent.
  */
+/**
+ * Apply a Configuration-Context to a running server, or clear it with null.
+ *
+ * Three places have to agree or the change is half-made: the client's own
+ * field, the axios default header that actually goes on the wire, and the
+ * ServerConfig that `describe_discovery` and `get_configuration_context`
+ * report from. Setting only the first is the easy mistake — requests would
+ * carry the old context while every report claimed the new one.
+ */
+function applyConfigurationContext(spec: StartedServer, uri: string | null): void {
+  spec.config.configurationContext = uri ?? undefined;
+  spec.client.configuration_context = uri;
+  const common = spec.client.client.defaults.headers.common;
+  if (uri) common['Configuration-Context'] = uri;
+  else delete common['Configuration-Context'];
+}
+
+/** Is this configuration URI reachable? Advisory only — never blocks a set. */
+async function configurationReachable(
+  client: OSLCClient, uri: string
+): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const r = await client.client.get(uri, {
+      headers: { Accept: 'application/rdf+xml', 'OSLC-Core-Version': '2.0' },
+      validateStatus: () => true,
+    });
+    const status = r?.status;
+    if (status >= 200 && status < 300) return { ok: true, detail: `HTTP ${status}` };
+    return { ok: false, detail: `HTTP ${status}` };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function jazzCsrfToken(client: OSLCClient, serverURL: string): Promise<string | undefined> {
   try {
     const jar = (client as any).jar;
@@ -780,6 +855,162 @@ export async function startServer(
             result = header + formatCatalogContent([sp]);
             break;
           }
+          case 'list_configurations': {
+            const lcArgs = args as { server?: string } | undefined;
+            const pool = lcArgs?.server
+              ? runtimes.filter((r) => r.spec.alias === lcArgs.server)
+              : runtimes;
+            if (pool.length === 0) {
+              throw new Error(`No configured server aliased '${lcArgs?.server}'. Configured: ` +
+                              runtimes.map((r) => r.spec.alias).join(', '));
+            }
+
+            const CONFIG_NS = ['open-services.net/ns/config', 'jazz.net/ns/globalconfig'];
+            const isConfigish = (s2: string | undefined) =>
+              !!s2 && CONFIG_NS.some((ns) => s2.includes(ns));
+
+            const found: string[] = [];
+            const rejected: string[] = [];
+
+            for (const r of pool) {
+              // A configuration server is an OSLC server like any other: its
+              // service providers are project areas (GCM) or configuration
+              // areas (CDCM), and their query capabilities are how
+              // configurations are listed. Prefer those over any catalog walk.
+              const sps = (r.discovery?.serviceProviders ?? []).filter((sp: any) =>
+                (sp.queries ?? []).some((q: any) => isConfigish(q.resourceType)) ||
+                (sp.domains ?? []).some((d: any) => isConfigish(String(d))));
+
+              const queries = sps.flatMap((sp: any) =>
+                (sp.queries ?? [])
+                  .filter((q: any) => isConfigish(q.resourceType) || (sp.domains ?? []).some((d: any) => isConfigish(String(d))))
+                  .map((q: any) => ({ sp, q })));
+
+              if (queries.length === 0) {
+                // Nothing discovered. Fall back to the rootservices catalog,
+                // which is all that is available when no service providers
+                // were scoped in the configuration file.
+                let cat;
+                try {
+                  cat = await resolveConfigurationCatalogUrl(r.spec.client, r.spec.config.serverURL);
+                } catch (e) {
+                  rejected.push(`- **${r.spec.alias}**: rootservices unreadable — ${e instanceof Error ? e.message : String(e)}`);
+                  continue;
+                }
+                if (!cat) { rejected.push(`- **${r.spec.alias}**: no configuration service providers discovered and no configuration catalog advertised`); continue; }
+                rejected.push(
+                  `- **${r.spec.alias}**: advertises a configuration catalog (\`${cat.url}\`) but no ` +
+                  `service providers were discovered for it. Scope one in the configuration file — ` +
+                  `a configuration server needs \`serviceProviders\` for the same scalability reason ` +
+                  `as any other, and discovery of its query capabilities is what lists configurations.`);
+                continue;
+              }
+
+              for (const { sp, q } of queries) {
+                let body: string;
+                try {
+                  const resp = await r.spec.client.client.get(q.queryBase, {
+                    headers: { Accept: 'application/rdf+xml', 'OSLC-Core-Version': '2.0' },
+                    validateStatus: () => true,
+                  });
+                  if (resp.status < 200 || resp.status >= 300) {
+                    const hint = resp.status === 401
+                      ? '  \n  ⚠ 401. A configuration server may require OAuth2 or a bearer token ' +
+                        'rather than username and password, which is not yet supported — see the ' +
+                        'credentials note in the configuration file.'
+                      : '';
+                    rejected.push(`- **${r.spec.alias}** ${sp.title}: query \`${q.queryBase}\` returned HTTP ${resp.status}${hint}`);
+                    continue;
+                  }
+                  body = String(resp.data);
+                } catch (e) {
+                  rejected.push(`- **${r.spec.alias}** ${sp.title}: query failed — ${e instanceof Error ? e.message : String(e)}`);
+                  continue;
+                }
+
+                const entries: string[] = [];
+                const re = /<[^>]*rdf:about="([^"]+)"[^>]*>([\s\S]{0,600}?)<\/[a-zA-Z_:]+>/g;
+                let m: RegExpExecArray | null;
+                while ((m = re.exec(body)) !== null) {
+                  const title = /<dcterms:title[^>]*>([^<]*)</.exec(m[2])?.[1];
+                  if (title) entries.push(`  - **${title}** — \`${m[1]}\``);
+                  if (entries.length >= 100) break;
+                }
+                const global = isConfigish(q.resourceType) && String(q.resourceType).includes('globalconfig');
+                found.push(
+                  `### ${r.spec.alias} — ${sp.title}${global ? ' (global)' : ''}\n` +
+                  `Query: \`${q.queryBase}\`  \n_resourceType ${q.resourceType || '(none declared)'}_\n\n` +
+                  (entries.length
+                    ? entries.join('\n')
+                    : `_No titled entries parsed from ${body.length} bytes — fetch the query base with get_resource to look._`)
+                );
+              }
+            }
+
+            const parts: string[] = ['## Configurations'];
+            if (found.length) {
+              parts.push(found.join('\n\n'));
+              parts.push('Apply one with `set_configuration_context`. Use **allServers:true** for a ' +
+                         'global configuration: an application group has a single configuration ' +
+                         'management server, and every application must resolve against the same ' +
+                         'global configuration for links between versioned resources to resolve. ' +
+                         'A local configuration is right only when driving one server on its own.');
+            } else {
+              parts.push('**No configurations could be listed.**');
+            }
+            if (rejected.length) parts.push(`### Servers that offered nothing\n${rejected.join('\n')}`);
+            result = parts.join('\n\n');
+            break;
+          }
+
+          case 'get_configuration_context': {
+            const lines = runtimes.map((r) => {
+              const set = r.spec.config.configurationContext;
+              const onWire = r.spec.client.client.defaults.headers.common['Configuration-Context'];
+              const agree = (set ?? undefined) === (onWire ?? undefined);
+              return `- **${r.spec.alias}** (${r.spec.config.serverURL})\n` +
+                     `  - context: ${set ? `\`${set}\`` : '_none set_'}\n` +
+                     `  - sent on the wire: ${onWire ? `\`${onWire}\`` : '_no header_'}` +
+                     (agree ? '' : '  ⚠ **disagrees with the configured value**');
+            });
+            const anySet = runtimes.some((r) => r.spec.config.configurationContext);
+            result = `## Configuration-Context\n\n${lines.join('\n')}\n\n` + (anySet
+              ? 'Requests resolve against this configuration. Change it with `set_configuration_context`.'
+              : '**No context is set.** Against a configuration-enabled project area the server ' +
+                'resolves each request against a configuration of its choosing, so results may be ' +
+                'correct-looking and about the wrong stream. Set one with `set_configuration_context`.');
+            break;
+          }
+
+          case 'set_configuration_context': {
+            const ccArgs = args as { uri?: string; allServers?: boolean };
+            if (typeof ccArgs?.uri !== 'string') {
+              throw new Error("set_configuration_context requires 'uri' (empty string to clear)");
+            }
+            const uri = ccArgs.uri.trim() === '' ? null : ccArgs.uri.trim();
+            const targets = ccArgs.allServers ? runtimes.map((r) => r.spec) : [spec];
+
+            let check = '';
+            if (uri) {
+              const { ok, detail } = await configurationReachable(client, uri);
+              check = ok
+                ? `\nReachable (${detail}).`
+                : `\n⚠ **Not reachable (${detail}).** Applied anyway — set it before the ` +
+                  `configuration exists if you mean to. If this is a typo, every subsequent ` +
+                  `request resolves against a configuration that is not there.`;
+            }
+            for (const t of targets) applyConfigurationContext(t, uri);
+            const names = targets.map((t) => t.alias).join(', ');
+            console.error(`[set_configuration_context] ${uri ?? '(cleared)'} on ${names}`);
+            result = uri
+              ? `Configuration-Context set to \`${uri}\` on: **${names}**.${check}\n\n` +
+                `Every subsequent request from ${targets.length > 1 ? 'these servers' : 'this server'} ` +
+                `carries it. This lasts for the life of the process — put it in the configuration ` +
+                `file to make it the default.`
+              : `Configuration-Context cleared on: **${names}**. Requests no longer send the header.`;
+            break;
+          }
+
           default:
             return {
               content: [{ type: 'text' as const, text: `Unknown tool: ${name}` }],

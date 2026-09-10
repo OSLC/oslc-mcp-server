@@ -40,6 +40,58 @@ const CATALOG_PREDICATES = [
 ];
 
 /**
+ * Predicates a configuration-management server uses to advertise its catalog
+ * of configurations.
+ *
+ * Kept separate from {@link CATALOG_PREDICATES} on purpose: these name
+ * catalogs of *configurations*, not of artifact service providers, and a
+ * client wants them for a different reason — to let a user pick the global
+ * configuration that every other server will then resolve against.
+ *
+ * Order matters. `globalConfigServiceProviders` is the catalog of global
+ * configurations, which is what spans applications and what a user normally
+ * means by "the configuration we are working in". `cmServiceProviders` is the
+ * local one, right only when a single configuration-enabled server is being
+ * driven on its own.
+ *
+ * ELM's GCM application advertises both:
+ *   global_config:globalConfigServiceProviders -> /gc/oslc-config/catalog
+ *   oslc_config:cmServiceProviders             -> /gc/anonymous-oslc-config/catalog
+ */
+export const CONFIG_CATALOG_PREDICATES = [
+  'http://jazz.net/ns/globalconfig#globalConfigServiceProviders',
+  'http://open-services.net/ns/config#cmServiceProviders',
+] as const;
+
+/**
+ * Resolve a server's *configuration* catalog from its rootservices, or
+ * undefined if it advertises none — which is the normal answer for an
+ * artifact server such as DOORS Next.
+ */
+export async function resolveConfigurationCatalogUrl(
+  client: OSLCClient,
+  serverURL: string
+): Promise<{ url: string; predicate: string } | undefined> {
+  const rootservices = `${serverURL.replace(/\/+$/, '')}/rootservices`;
+  let store: any;
+  try {
+    const response = await client.client.get(rootservices, {
+      headers: { Accept: ACCEPT_RDF, 'OSLC-Core-Version': '2.0' },
+    });
+    store = rdflib.graph();
+    rdflib.parse(String(response.data), store, rootservices, 'application/rdf+xml');
+  } catch {
+    return undefined;
+  }
+  const subject = rdflib.sym(rootservices);
+  for (const predicate of CONFIG_CATALOG_PREDICATES) {
+    const value = store.any(subject, rdflib.sym(predicate), null);
+    if (value?.value) return { url: String(value.value), predicate };
+  }
+  return undefined;
+}
+
+/**
  * How a catalog URL was arrived at. `describe_discovery` reports it, because
  * a URL the operator asserted and one the server advertised are different
  * situations that look identical downstream.

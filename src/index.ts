@@ -56,6 +56,21 @@ function resolveServers(args: CliArgs):
   if (configPath) {
     const file = loadConfigFile(configPath);
     const servers = file.servers.map((entry) => {
+      // A per-service-provider `configurationContext` is accepted by the
+      // configuration parser but cannot be honoured: one OSLCClient serves the
+      // whole server entry and carries a single Configuration-Context header.
+      // Say so rather than ignoring it silently — a context that looks set and
+      // is not is exactly the failure this header exists to prevent.
+      const perSp = (entry.serviceProviders ?? []).filter((sp) => sp.configurationContext);
+      if (perSp.length > 0) {
+        console.error(
+          `[config] Server \`${entry.alias}\`: ${perSp.length} serviceProvider entr` +
+          `${perSp.length === 1 ? 'y sets' : 'ies set'} \`configurationContext\`, which is NOT applied — ` +
+          `the context is per server, not per service provider. Set it at server level, or switch ` +
+          `at runtime with set_configuration_context.`
+        );
+      }
+
       const { username, password } = resolveCredentials(entry, process.env);
       return {
         alias: entry.alias,
