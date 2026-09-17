@@ -39,6 +39,33 @@
 # username/password also work and emit one warning at load — the file is
 # git-ignored, but it still travels in pastes, backups and screen shares.
 
+# ── oauth ───────────────────────────────────────────────────────────────
+# For servers behind an OAuth 2.0 issuer, which accept no username and
+# password at all — CDCM, Rhapsody Systems Engineering, and ELM
+# applications fronted by a Jazz Authorization Server.
+#
+# This server obtains its own token with the client credentials grant. It
+# does not share one with any other tool, and no token passes between them.
+#
+# ATTRIBUTION: a client credentials token carries no user. Every change is
+# attributed to the configured client, and what it can see is what that
+# service account can see -- not what you can see. Register a service
+# account deliberately rather than reusing a person's client. The server
+# says whose identity it is using at startup.
+#
+# scope is deployment-specific and has NO default: a service account's
+# scope is not a user's. CDCM service integrations use `service-user-roles`;
+# ELM applications behind JSA require `general` of a user token. A wrong
+# scope authenticates and then fails authorization, which is harder to
+# diagnose than no scope at all.
+#
+# Prefer clientIdEnv/clientSecretEnv over literals, for the same reason as
+# usernameEnv/passwordEnv.
+#
+# `credentials` and `oauth` are not alternatives to be hedged between: give
+# a server whichever one it actually accepts. A server with `oauth` uses it
+# for every request.
+
 # ── reportPath ──────────────────────────────────────────────────────────
 # Where the discovery report is written, on every start (default
 # ./oslc-discovery.md). It lists each service provider, every creation factory
@@ -84,6 +111,16 @@ servers:
       - uri: https://elm.example.com/ccm/oslc/contexts/_PROJECT_AREA_ID/workitems/services.xml
         alias: change
     # Work items are not versioned, so no configuration context applies.
+
+  # A server behind an OAuth 2.0 issuer, which takes no username and
+  # password at all. Changes are attributed to the service account.
+  # - alias: cdcm
+  #   baseUrl: https://cdcm.example.com/cdcm/SPACE-KEY
+  #   oauth:
+  #     issuer: https://cdcm.example.com/oidc/endpoint/jazzop
+  #     clientIdEnv: CDCM_CLIENT_ID
+  #     clientSecretEnv: CDCM_CLIENT_SECRET
+  #     scope: service-user-roles
 
   # A single non-ELM server needs far less: no rootservices, so the
   # ${baseUrl}/oslc/catalog convention applies, and no configuration context.

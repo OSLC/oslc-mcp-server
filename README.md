@@ -54,6 +54,11 @@ servers:
     credentials:                                 # optional
       usernameEnv: ELM_USER
       passwordEnv: ELM_PASSWORD
+    oauth:                                       # optional — instead of credentials
+      issuer: https://…/oidc/endpoint/jazzop     # required within the block
+      clientIdEnv: CDCM_CLIENT_ID
+      clientSecretEnv: CDCM_CLIENT_SECRET
+      scope: service-user-roles                  # no default — see below
     serviceProviders:                            # optional — omit to walk the catalog
       - uri: https://…/oslc_rm/_ID/services.xml  # required within the list
         alias: requirements                      # optional
@@ -68,6 +73,11 @@ servers:
 | `catalogUrl` | no | discovered from `rootservices` |
 | `configurationContext` | no | none. Fallback for the server's service providers |
 | `credentials` | no | unauthenticated |
+| `oauth` | no | none. For servers that accept no username and password |
+| `oauth.issuer` | yes, within the block | — token endpoint is `${issuer}/token` |
+| `oauth.clientId` / `clientIdEnv` | yes, within the block | — |
+| `oauth.clientSecret` / `clientSecretEnv` | yes, within the block | — |
+| `oauth.scope` | no | **none — not defaulted.** See below |
 | `serviceProviders` | no | absent means walk the whole catalog |
 | `serviceProviders[].uri` | yes, within the list | — |
 | `serviceProviders[].alias` | no | — |
@@ -82,6 +92,26 @@ servers:
 ```
 
 Literal `username` / `password` also work, and emit one warning at load naming the server. The file is git-ignored, but it still travels in pastes, backups and screen shares — so environment references remain the better default. When both forms are present the environment references win, so an operator can override without editing the file. A half-specified `credentials` block (say `username` with no `password`) is an error rather than a warning, since that is a typo rather than a choice.
+
+**OAuth 2.0.** Some servers accept no username and password at all — CDCM, Rhapsody Systems Engineering, and ELM applications fronted by a Jazz Authorization Server. Give those an `oauth` block instead of `credentials`:
+
+```yaml
+    oauth:
+      issuer: https://cdcm.example.com/oidc/endpoint/jazzop
+      clientIdEnv: CDCM_CLIENT_ID
+      clientSecretEnv: CDCM_CLIENT_SECRET
+      scope: service-user-roles
+```
+
+This server obtains its own token with the **client credentials** grant, caches it with a refresh margin, and renews it behind a single-flight guard so that concurrent discovery fetches cause one token exchange rather than one per request. It does **not** share a token with any other tool, and none passes between them — each host obtains its own.
+
+> **Attribution.** A client credentials token carries no user. Every change is attributed to the configured client, and what it can see is what that service account can see — not what you can see. CDCM's `requireReadAccessInConfigurationArea` tests whichever identity the token carries. Register a service account deliberately rather than reusing a person's client. The server names the account at startup, so this does not have to be discovered from an audit log.
+
+**`scope` has no default, deliberately.** A service account's scope is not a user's, and it is specific to the deployment: CDCM service integrations use `service-user-roles`, while ELM applications behind a JSA require `general` of a user token. Guessing would produce a token that authenticates and then fails authorization — harder to diagnose than no scope at all.
+
+`clientIdEnv` / `clientSecretEnv` are preferred over the literal `clientId` / `clientSecret` for the same reason as `usernameEnv` / `passwordEnv`, with the same precedence: an environment reference wins over a literal. A named-but-unset variable is an error rather than a silent fall back to the literal — naming the variable says where the value comes from, and quietly reading a different source is how a stale credential survives a rotation. Errors name the server and the variable, never a value.
+
+This needs `oslc-client >= 4.2.0`, which added the credential-provider seam.
 
 **Scoping discovery.** `serviceProviders` restricts startup to the listed providers and **the catalog is never fetched**. This matters because on an ELM application **one service provider is one project area**, and a production server may have thousands — an unscoped startup would crawl every one. Omit the list and the catalog is walked as before.
 
