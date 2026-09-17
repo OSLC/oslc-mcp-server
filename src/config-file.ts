@@ -167,11 +167,15 @@ export function parseConfigFile(yamlText: string): ConfigFile {
         clientSecretEnv: str(o.clientSecretEnv),
         scope: str(o.scope),
       };
-      if (!oauth.clientIdEnv && oauth.clientId) {
+      // Keyed on the SECRET, not the client id. A client id is an identifier,
+      // not a credential — it travels in plain sight in every authorize URL.
+      // Warning about it would fire on a correctly configured server and train
+      // the operator to ignore the warning that does matter.
+      if (!oauth.clientSecretEnv && oauth.clientSecret) {
         console.error(
-          `[config] Server \`${alias}\` uses a literal OAuth client id. The configuration ` +
-          `file is git-ignored, but it still travels in pastes, backups and screen ` +
-          `shares — prefer \`clientIdEnv\`/\`clientSecretEnv\` where you can.`
+          `[config] Server \`${alias}\` uses a literal OAuth client secret. The ` +
+          `configuration file is git-ignored, but it still travels in pastes, backups ` +
+          `and screen shares — prefer \`clientSecretEnv\` where you can.`
         );
       }
     }

@@ -199,3 +199,41 @@ servers:
 `)).toThrow(/issuer/i);
   });
 });
+
+describe('oauth literal-secret warning', () => {
+  it('warns when the client secret is a literal, naming the server', () => {
+    const warn = jest.spyOn(console, 'error').mockImplementation(() => {});
+    parseConfigFile(`
+servers:
+  - alias: cdcm
+    baseUrl: https://x/cdcm
+    oauth:
+      issuer: https://i
+      clientId: c
+      clientSecret: literal-secret
+`);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/cdcm/);
+    // The warning must not quote the value it is warning about.
+    expect(String(warn.mock.calls[0][0])).not.toMatch(/literal-secret/);
+    warn.mockRestore();
+  });
+
+  it('does not warn about a literal client id when the secret comes from the environment', () => {
+    // A client id is an identifier, not a credential — it appears in every
+    // authorize URL. Warning about it would fire on a correctly configured
+    // server and train the operator to ignore the warning that matters.
+    const warn = jest.spyOn(console, 'error').mockImplementation(() => {});
+    parseConfigFile(`
+servers:
+  - alias: cdcm
+    baseUrl: https://x/cdcm
+    oauth:
+      issuer: https://i
+      clientId: resource-navigator
+      clientSecretEnv: ELM_SECRET
+`);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
