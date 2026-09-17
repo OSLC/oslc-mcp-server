@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { resolveCredentials } from './credentials.js';
+import { resolveCredentials, resolveOAuth } from './credentials.js';
 import type { ServerEntry } from './config-file.js';
 
 const base: ServerEntry = { alias: 'dng', baseUrl: 'https://elm.example.com/rm' };
@@ -51,6 +51,47 @@ describe('resolveCredentials', () => {
       throw new Error('should have thrown');
     } catch (err) {
       expect(String(err)).not.toContain('secret');
+    }
+  });
+});
+
+const withOauth = (oauth: any) => ({ alias: 'cdcm', baseUrl: 'https://x', oauth } as any);
+
+describe('resolveOAuth', () => {
+  it('returns null when a server configures no oauth, so nothing changes for it', () => {
+    expect(resolveOAuth({ alias: 'dng', baseUrl: 'https://x' } as any, {})).toBeNull();
+  });
+
+  it('reads the environment variables the config names', () => {
+    const resolved = resolveOAuth(
+      withOauth({ issuer: 'https://i', clientIdEnv: 'CID', clientSecretEnv: 'CSEC', scope: 's' }),
+      { CID: 'the-client', CSEC: 'the-secret' }
+    );
+    expect(resolved).toEqual({
+      issuer: 'https://i', clientId: 'the-client', clientSecret: 'the-secret', scope: 's',
+    });
+  });
+
+  it('prefers environment references over literals, so an operator can override the file', () => {
+    const resolved = resolveOAuth(
+      withOauth({ issuer: 'https://i', clientId: 'literal', clientIdEnv: 'CID',
+                  clientSecret: 'literal', clientSecretEnv: 'CSEC' }),
+      { CID: 'from-env', CSEC: 'secret-from-env' }
+    );
+    expect(resolved!.clientId).toBe('from-env');
+  });
+
+  it('names the server and the missing variable, never a value', () => {
+    expect(() => resolveOAuth(
+      withOauth({ issuer: 'https://i', clientIdEnv: 'CID', clientSecretEnv: 'CSEC' }),
+      { CID: 'the-client' }
+    )).toThrow(/cdcm.*CSEC/);
+
+    try {
+      resolveOAuth(withOauth({ issuer: 'https://i', clientIdEnv: 'CID', clientSecretEnv: 'CSEC' }),
+                   { CID: 'the-client' });
+    } catch (e: any) {
+      expect(e.message).not.toContain('the-client');
     }
   });
 });
