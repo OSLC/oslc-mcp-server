@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { requestClientCredentialsToken } from './oauth-token.js';
+import { requestClientCredentialsToken, requestToken } from './oauth-token.js';
 
 const oauth = {
   issuer: 'https://jas.example.com/oidc/endpoint/jazzop',
@@ -68,5 +68,60 @@ describe('requestClientCredentialsToken', () => {
 
     await expect(requestClientCredentialsToken(oauth, fetchImpl))
       .rejects.toThrow(/no access_token/i);
+  });
+});
+
+describe('requestToken — password grant', () => {
+  const userOauth = { ...oauth, grant: 'password' as const, username: 'jamsden', password: 'pw' };
+
+  it('posts the password grant with the user, authenticating the client with Basic', async () => {
+    const calls: any[] = [];
+    const fetchImpl = (async (url: any, init: any) => {
+      calls.push([url, init]);
+      return { ok: true, status: 200, json: async () => ({ access_token: 'USERTOKEN', expires_in: 3600 }) };
+    }) as any;
+
+    const tokens = await requestToken(userOauth, fetchImpl);
+
+    expect(calls[0][0]).toBe('https://jas.example.com/oidc/endpoint/jazzop/token');
+    // The CLIENT authenticates with Basic; the USER travels in the form.
+    expect(calls[0][1].headers['Authorization'])
+      .toBe('Basic ' + Buffer.from('mcp-server:s3cret').toString('base64'));
+
+    const form = new URLSearchParams(calls[0][1].body);
+    expect(form.get('grant_type')).toBe('password');
+    expect(form.get('username')).toBe('jamsden');
+    expect(form.get('password')).toBe('pw');
+    expect(form.get('scope')).toBe('service-user-roles');
+    expect(tokens.accessToken).toBe('USERTOKEN');
+  });
+
+  it('routes the client_credentials grant to the client credentials exchange', async () => {
+    const calls: any[] = [];
+    const fetchImpl = (async (url: any, init: any) => {
+      calls.push(init);
+      return { ok: true, status: 200, json: async () => ({ access_token: 'AT', expires_in: 60 }) };
+    }) as any;
+
+    await requestToken({ ...oauth, grant: 'client_credentials' as const }, fetchImpl);
+
+    const form = new URLSearchParams(calls[0].body);
+    expect(form.get('grant_type')).toBe('client_credentials');
+    expect(form.has('username')).toBe(false);
+  });
+
+  it('refuses a password grant with no user rather than posting an empty one', async () => {
+    const fetchImpl = (async () => { throw new Error('must not be called'); }) as any;
+    await expect(requestToken({ ...oauth, grant: 'password' as const }, fetchImpl))
+      .rejects.toThrow(/username and password/i);
+  });
+
+  it('never puts the user password in the error when the exchange fails', async () => {
+    const fetchImpl = (async () => ({
+      ok: false, status: 400, text: async () => '{"error":"invalid_grant"}',
+    })) as any;
+
+    await expect(requestToken(userOauth, fetchImpl)).rejects.toThrow(/invalid_grant/);
+    await expect(requestToken(userOauth, fetchImpl)).rejects.not.toThrow(/pw|s3cret/);
   });
 });

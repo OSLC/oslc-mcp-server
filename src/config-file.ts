@@ -36,6 +36,12 @@ export interface OAuthEntry {
   clientSecret?: string;
   clientSecretEnv?: string;
   /**
+   * Which grant obtains the token, and therefore whose identity it carries.
+   * Defaults to `password` when the server also configures `credentials`, and
+   * to `client_credentials` when it does not.
+   */
+  grant?: 'password' | 'client_credentials';
+  /**
    * Deployment-specific and deliberately not defaulted: a service account's
    * scope is not a user's. CDCM service integrations use `service-user-roles`;
    * ELM applications behind JSA require `general` of a user token. A wrong
@@ -165,6 +171,7 @@ export function parseConfigFile(yamlText: string): ConfigFile {
         clientIdEnv: str(o.clientIdEnv),
         clientSecret: str(o.clientSecret),
         clientSecretEnv: str(o.clientSecretEnv),
+        grant: str(o.grant) as OAuthEntry['grant'],
         scope: str(o.scope),
       };
       // Keyed on the SECRET, not the client id. A client id is an identifier,

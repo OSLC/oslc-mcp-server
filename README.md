@@ -54,8 +54,9 @@ servers:
     credentials:                                 # optional
       usernameEnv: ELM_USER
       passwordEnv: ELM_PASSWORD
-    oauth:                                       # optional — instead of credentials
+    oauth:                                       # optional
       issuer: https://…/oidc/endpoint/jazzop     # required within the block
+      grant: password                            # default when credentials is set
       clientIdEnv: CDCM_CLIENT_ID
       clientSecretEnv: CDCM_CLIENT_SECRET
       scope: service-user-roles                  # no default — see below
@@ -77,6 +78,7 @@ servers:
 | `oauth.issuer` | yes, within the block | — token endpoint is `${issuer}/token` |
 | `oauth.clientId` / `clientIdEnv` | yes, within the block | — |
 | `oauth.clientSecret` / `clientSecretEnv` | yes, within the block | — |
+| `oauth.grant` | no | `password` when `credentials` is set, else `client_credentials` |
 | `oauth.scope` | no | **none — not defaulted.** See below |
 | `serviceProviders` | no | absent means walk the whole catalog |
 | `serviceProviders[].uri` | yes, within the list | — |
@@ -103,9 +105,20 @@ Literal `username` / `password` also work, and emit one warning at load naming t
       scope: service-user-roles
 ```
 
-This server obtains its own token with the **client credentials** grant, caches it with a refresh margin, and renews it behind a single-flight guard so that concurrent discovery fetches cause one token exchange rather than one per request. It does **not** share a token with any other tool, and none passes between them — each host obtains its own.
+This server obtains its own token, caches it with a refresh margin, and renews it behind a single-flight guard so that concurrent discovery fetches cause one token exchange rather than one per request. It does **not** share a token with any other tool, and none passes between them — each host obtains its own.
 
-> **Attribution.** A client credentials token carries no user. Every change is attributed to the configured client, and what it can see is what that service account can see — not what you can see. CDCM's `requireReadAccessInConfigurationArea` tests whichever identity the token carries. Register a service account deliberately rather than reusing a person's client. The server names the account at startup, so this does not have to be discovered from an audit log.
+**Which grant, and therefore whose identity.** `grant` selects this, and the default follows what the server already has:
+
+| `grant` | Token represents | Needs |
+|---|---|---|
+| `password` (default when `credentials` is set) | **the user** named by `credentials` | `credentials` plus the OAuth client |
+| `client_credentials` (default without `credentials`) | the OAuth **client** itself, no user | the OAuth client only |
+
+Prefer `password` where there is a user to represent. A deployment's access rules are written about people — CDCM's `requireReadAccessInConfigurationArea` tests whichever identity the token carries — so a service-principal token sees what *it* can see, not what you can see, and every change is attributed to the client in the audit log. The server states which grant and which identity it is using at startup, so this never has to be discovered from an audit log afterwards.
+
+> OAuth 2.1 drops the password grant because a third-party client should never handle a user's password. That reasoning does not bite here: this process already holds the password and already submits it to the same organisation's token endpoint over oslc-client's JAS bearer path, so the grant adds no exposure that was not already present. For a host with a browser and a user at the keyboard — Resource Navigator, say — authorization code with PKCE remains the right choice.
+
+**One token for the whole estate.** The cache is keyed by the identity a token represents — issuer, client, grant, user and scope — not by server. A deployment that is one ELM application group behind one issuer is five server entries but **one** identity, so it performs one exchange rather than five, and a rejection on any server refreshes the credential all of them use. Entries that differ in user or scope correctly get separate tokens, since a token minted for one carries the wrong access for the other. The key holds no secret: the client secret and the user's password authenticate a request for a token, they do not distinguish one.
 
 **`scope` has no default, deliberately.** A service account's scope is not a user's, and it is specific to the deployment: CDCM service integrations use `service-user-roles`, while ELM applications behind a JSA require `general` of a user token. Guessing would produce a token that authenticates and then fails authorization — harder to diagnose than no scope at all.
 

@@ -5,7 +5,7 @@ import { discover, discoverFromServiceProviders } from './discovery.js';
 import { startServer, type StartedServer } from './server.js';
 import { loadConfigFile } from './config-file.js';
 import { resolveCredentials, resolveOAuth } from './credentials.js';
-import { buildClientOptions } from './oauth-credential.js';
+import { buildClientOptions, TokenStore } from './oauth-credential.js';
 import { resolveCatalogUrl } from './catalog-resolution.js';
 import type { ResolvedServer } from './server-config.js';
 
@@ -125,6 +125,11 @@ async function main(): Promise<void> {
   const { servers, reportPath, reportBaseDir } = resolveServers(args);
   const prefixTools = servers.length > 1;
 
+  // One store for the process, so servers sharing an identity share a token:
+  // five entries behind one issuer exchange one token, not five, and a
+  // rejection on any of them refreshes the credential all of them use.
+  const tokens = new TokenStore();
+
   const started: StartedServer[] = [];
   for (const server of servers) {
     const { config, alias, serviceProviderURIs } = server;
@@ -134,12 +139,16 @@ async function main(): Promise<void> {
     }
 
     if (config.oauth) {
-      // Attribution is the service principal, not a person. Said at startup
-      // because an operator should not have to discover it from an audit log.
+      // Say whose identity the token carries. An operator should not have to
+      // discover from an audit log who their changes were attributed to.
+      const o = config.oauth;
       console.error(
-        `[startup] ${alias}: OAuth client credentials as \`${config.oauth.clientId}\` — ` +
-        `changes will be attributed to this service account, not to a user, and it sees ` +
-        `what that account can see`
+        o.grant === 'password'
+          ? `[startup] ${alias}: OAuth password grant as \`${o.username}\` via client ` +
+            `\`${o.clientId}\` — changes are attributed to that user`
+          : `[startup] ${alias}: OAuth client credentials as \`${o.clientId}\` — changes ` +
+            `will be attributed to this service account, not to a user, and it sees what ` +
+            `that account can see`
       );
     }
 
@@ -147,7 +156,7 @@ async function main(): Promise<void> {
       config.username || undefined,
       config.password || undefined,
       config.configurationContext ?? null,
-      buildClientOptions(config.oauth ?? null)
+      buildClientOptions(config.oauth ?? null, tokens)
     );
 
     // An explicit value, else whatever rootservices advertises. Never a guess.

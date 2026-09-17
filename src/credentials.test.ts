@@ -69,6 +69,9 @@ describe('resolveOAuth', () => {
     );
     expect(resolved).toEqual({
       issuer: 'https://i', clientId: 'the-client', clientSecret: 'the-secret', scope: 's',
+      // This server configures no credentials, so there is no user for a token
+      // to represent and the grant falls back to the client itself.
+      grant: 'client_credentials', username: undefined, password: undefined,
     });
   });
 
@@ -93,5 +96,54 @@ describe('resolveOAuth', () => {
     } catch (e: any) {
       expect(e.message).not.toContain('the-client');
     }
+  });
+});
+
+describe('resolveOAuth — grant selection and the resource owner', () => {
+  const withBoth = (oauth: any, credentials: any) =>
+    ({ alias: 'cdcm', baseUrl: 'https://x', oauth, credentials } as any);
+
+  it('defaults to the password grant when the server has credentials, so the token is the user', () => {
+    const resolved = resolveOAuth(
+      withBoth({ issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS' },
+               { usernameEnv: 'U', passwordEnv: 'P' }),
+      { CS: 'sec', U: 'jamsden', P: 'pw' }
+    );
+    expect(resolved).toMatchObject({ grant: 'password', username: 'jamsden', password: 'pw' });
+  });
+
+  it('defaults to client credentials when there is no user to represent', () => {
+    const resolved = resolveOAuth(
+      withBoth({ issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS' }, undefined),
+      { CS: 'sec' }
+    );
+    expect(resolved!.grant).toBe('client_credentials');
+    expect(resolved!.username).toBeUndefined();
+  });
+
+  it('honours an explicit grant over the default', () => {
+    const resolved = resolveOAuth(
+      withBoth({ issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS', grant: 'client_credentials' },
+               { usernameEnv: 'U', passwordEnv: 'P' }),
+      { CS: 'sec', U: 'jamsden', P: 'pw' }
+    );
+    expect(resolved!.grant).toBe('client_credentials');
+    // A service-principal token must not carry the user's password with it.
+    expect(resolved!.password).toBeUndefined();
+  });
+
+  it('rejects an unknown grant rather than silently choosing one', () => {
+    expect(() => resolveOAuth(
+      withBoth({ issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS', grant: 'implicit' },
+               { usernameEnv: 'U', passwordEnv: 'P' }),
+      { CS: 'sec', U: 'u', P: 'p' }
+    )).toThrow(/grant/i);
+  });
+
+  it('names the server when the password grant has no credentials to use', () => {
+    expect(() => resolveOAuth(
+      withBoth({ issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS', grant: 'password' }, undefined),
+      { CS: 'sec' }
+    )).toThrow(/cdcm.*credentials/i);
   });
 });

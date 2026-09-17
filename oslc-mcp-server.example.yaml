@@ -47,11 +47,25 @@
 # This server obtains its own token with the client credentials grant. It
 # does not share one with any other tool, and no token passes between them.
 #
-# ATTRIBUTION: a client credentials token carries no user. Every change is
-# attributed to the configured client, and what it can see is what that
-# service account can see -- not what you can see. Register a service
-# account deliberately rather than reusing a person's client. The server
-# says whose identity it is using at startup.
+# WHOSE IDENTITY. `grant` decides, and the default follows what the server
+# already has:
+#   password             (default when `credentials` is set)
+#                        exchanges that username and password for a token
+#                        representing THE USER. Prefer this where there is a
+#                        user to represent: a deployment's access rules are
+#                        written about people, and CDCM's
+#                        requireReadAccessInConfigurationArea tests whichever
+#                        identity the token carries.
+#   client_credentials   (default without `credentials`)
+#                        a token representing the CLIENT, with no user. It
+#                        sees what that service account can see, not what you
+#                        can see, and every change is attributed to it.
+# The server states the grant and the identity at startup.
+#
+# ONE TOKEN FOR THE ESTATE. The cache is keyed by the identity a token
+# represents -- issuer, client, grant, user, scope -- not by server. Five
+# entries behind one issuer perform ONE exchange and share the result, and a
+# rejection on any of them refreshes the credential all of them use.
 #
 # scope is deployment-specific and has NO default: a service account's
 # scope is not a user's. CDCM service integrations use `service-user-roles`;
@@ -116,11 +130,14 @@ servers:
   # password at all. Changes are attributed to the service account.
   # - alias: cdcm
   #   baseUrl: https://cdcm.example.com/cdcm/SPACE-KEY
+  #   credentials:            # names the user the token will represent
+  #     usernameEnv: ELM_USER
+  #     passwordEnv: ELM_PASSWORD
   #   oauth:
   #     issuer: https://cdcm.example.com/oidc/endpoint/jazzop
   #     clientIdEnv: CDCM_CLIENT_ID
   #     clientSecretEnv: CDCM_CLIENT_SECRET
-  #     scope: service-user-roles
+  #     scope: general
 
   # A single non-ELM server needs far less: no rootservices, so the
   # ${baseUrl}/oslc/catalog convention applies, and no configuration context.
