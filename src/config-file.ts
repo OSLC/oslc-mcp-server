@@ -20,6 +20,31 @@ export interface CredentialsSpec {
   password?: string;
 }
 
+/**
+ * OAuth 2.0 client credentials for one server, for servers that accept no
+ * username and password at all.
+ *
+ * Prefer the *Env forms for the same reason as usernameEnv/passwordEnv: the
+ * configuration file is git-ignored but still travels in pastes, backups and
+ * screen shares.
+ */
+export interface OAuthEntry {
+  /** OIDC issuer. The token endpoint is `${issuer}/token`. */
+  issuer: string;
+  clientId?: string;
+  clientIdEnv?: string;
+  clientSecret?: string;
+  clientSecretEnv?: string;
+  /**
+   * Deployment-specific and deliberately not defaulted: a service account's
+   * scope is not a user's. CDCM service integrations use `service-user-roles`;
+   * ELM applications behind JSA require `general` of a user token. A wrong
+   * scope authenticates and then fails authorization, which is harder to
+   * diagnose than no scope at all.
+   */
+  scope?: string;
+}
+
 /** One OSLC server. An ELM deployment needs one entry per application. */
 export interface ServerEntry {
   alias: string;
@@ -27,6 +52,7 @@ export interface ServerEntry {
   catalogUrl?: string;
   configurationContext?: string;
   credentials?: CredentialsSpec;
+  oauth?: OAuthEntry;
   serviceProviders?: ServiceProviderEntry[];
 }
 
@@ -124,6 +150,32 @@ export function parseConfigFile(yamlText: string): ConfigFile {
       };
     }
 
+    let oauth: OAuthEntry | undefined;
+    if (s.oauth !== undefined) {
+      const o = (s.oauth ?? {}) as Record<string, unknown>;
+      // Without an issuer there is no token endpoint to ask, so the block
+      // could not be acted on — say so here rather than at the first request.
+      if (typeof o.issuer !== 'string' || o.issuer.length === 0) {
+        throw new Error(`Server \`${alias}\`: \`oauth\` requires an \`issuer\`.`);
+      }
+      const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : undefined);
+      oauth = {
+        issuer: o.issuer,
+        clientId: str(o.clientId),
+        clientIdEnv: str(o.clientIdEnv),
+        clientSecret: str(o.clientSecret),
+        clientSecretEnv: str(o.clientSecretEnv),
+        scope: str(o.scope),
+      };
+      if (!oauth.clientIdEnv && oauth.clientId) {
+        console.error(
+          `[config] Server \`${alias}\` uses a literal OAuth client id. The configuration ` +
+          `file is git-ignored, but it still travels in pastes, backups and screen ` +
+          `shares — prefer \`clientIdEnv\`/\`clientSecretEnv\` where you can.`
+        );
+      }
+    }
+
     const serviceProviders = (s.serviceProviders as unknown[] | undefined)?.map((sp, j) => {
       const p = (sp ?? {}) as Record<string, unknown>;
       if (typeof p.uri !== 'string' || p.uri.length === 0) {
@@ -146,6 +198,7 @@ export function parseConfigFile(yamlText: string): ConfigFile {
       configurationContext:
         typeof s.configurationContext === 'string' ? s.configurationContext : undefined,
       credentials,
+      oauth,
       serviceProviders,
     };
   });

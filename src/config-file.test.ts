@@ -158,3 +158,44 @@ describe('loadConfigFile — where a relative reportPath points', () => {
     expect(loaded.baseDir).toBe(join(dir, 'nested'));   // still known, for the probe report
   });
 });
+
+describe('oauth block', () => {
+  it('parses an oauth block naming environment variables', () => {
+    const parsed = parseConfigFile(`
+servers:
+  - alias: cdcm
+    baseUrl: https://trs-filter.example.com/cdcm/SPACE
+    oauth:
+      issuer: https://trs-filter.example.com/oidc/endpoint/jazzop
+      clientIdEnv: CDCM_CLIENT_ID
+      clientSecretEnv: CDCM_CLIENT_SECRET
+      scope: service-user-roles
+`);
+
+    expect(parsed.servers[0].oauth).toEqual({
+      issuer: 'https://trs-filter.example.com/oidc/endpoint/jazzop',
+      clientIdEnv: 'CDCM_CLIENT_ID',
+      clientSecretEnv: 'CDCM_CLIENT_SECRET',
+      scope: 'service-user-roles',
+    });
+  });
+
+  it('leaves oauth undefined when absent, so existing configurations are unaffected', () => {
+    const parsed = parseConfigFile(`
+servers:
+  - alias: dng
+    baseUrl: https://elm.example.com/rm
+`);
+    expect(parsed.servers[0].oauth).toBeUndefined();
+  });
+
+  it('rejects an oauth block with no issuer, which could not be acted on', () => {
+    expect(() => parseConfigFile(`
+servers:
+  - alias: cdcm
+    baseUrl: https://x/cdcm
+    oauth:
+      clientIdEnv: A
+`)).toThrow(/issuer/i);
+  });
+});
