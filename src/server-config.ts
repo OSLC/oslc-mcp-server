@@ -1,3 +1,5 @@
+import type { ResolvedOAuth } from './credentials.js';
+
 /**
  * Configuration for one OSLC server, resolved from the configuration file
  * or from CLI args and environment variables.
@@ -14,6 +16,12 @@ export interface ServerConfig {
    * stream or baseline it applies to.
    */
   configurationContext?: string;
+  /**
+   * Resolved OAuth client credentials, for servers that accept no username and
+   * password at all. Absent for every other server, which then authenticates
+   * exactly as before.
+   */
+  oauth?: ResolvedOAuth;
 }
 
 /** One configured server, ready to construct a client for. */

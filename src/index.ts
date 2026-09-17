@@ -4,7 +4,8 @@ import { OSLCClient } from 'oslc-client';
 import { discover, discoverFromServiceProviders } from './discovery.js';
 import { startServer, type StartedServer } from './server.js';
 import { loadConfigFile } from './config-file.js';
-import { resolveCredentials } from './credentials.js';
+import { resolveCredentials, resolveOAuth } from './credentials.js';
+import { buildClientOptions } from './oauth-credential.js';
 import { resolveCatalogUrl } from './catalog-resolution.js';
 import type { ResolvedServer } from './server-config.js';
 
@@ -72,6 +73,7 @@ function resolveServers(args: CliArgs):
       }
 
       const { username, password } = resolveCredentials(entry, process.env);
+      const oauth = resolveOAuth(entry, process.env);
       return {
         alias: entry.alias,
         config: {
@@ -81,6 +83,7 @@ function resolveServers(args: CliArgs):
           username,
           password,
           configurationContext: entry.configurationContext,
+          oauth: oauth ?? undefined,
         },
         serviceProviderURIs: (entry.serviceProviders ?? []).map((sp) => sp.uri),
       };
@@ -130,10 +133,21 @@ async function main(): Promise<void> {
       console.error(`[startup] ${alias}: configuration context ${config.configurationContext}`);
     }
 
+    if (config.oauth) {
+      // Attribution is the service principal, not a person. Said at startup
+      // because an operator should not have to discover it from an audit log.
+      console.error(
+        `[startup] ${alias}: OAuth client credentials as \`${config.oauth.clientId}\` — ` +
+        `changes will be attributed to this service account, not to a user, and it sees ` +
+        `what that account can see`
+      );
+    }
+
     const client = new OSLCClient(
       config.username || undefined,
       config.password || undefined,
-      config.configurationContext ?? null
+      config.configurationContext ?? null,
+      buildClientOptions(config.oauth ?? null)
     );
 
     // An explicit value, else whatever rootservices advertises. Never a guess.
