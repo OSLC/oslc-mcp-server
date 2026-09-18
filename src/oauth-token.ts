@@ -94,12 +94,20 @@ export async function exchangeAuthorizationCode(
 export async function refreshAccessToken(
   oauth: ResolvedOAuth,
   refreshToken: string,
+  verifier?: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<TokenSet> {
   const form = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
   });
+  // RFC 6749 does not define `code_verifier` on a refresh, but IBM Jazz
+  // Authorization Server requires it when the original grant used PKCE —
+  // without it the token endpoint answers `CWOAU0033E: A required runtime
+  // parameter was missing: code_verifier`. Sent only when we have one, and
+  // harmless where it is not wanted: an authorization server must ignore
+  // request parameters it does not recognise.
+  if (verifier) form.set('code_verifier', verifier);
   const tokens = await postTokenRequest(oauth, form, fetchImpl, { withScope: false });
   return { ...tokens, refreshToken: tokens.refreshToken ?? refreshToken };
 }

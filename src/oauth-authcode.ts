@@ -2,14 +2,15 @@ import type { ResolvedOAuth } from './credentials.js';
 import { exchangeAuthorizationCode, refreshAccessToken, type TokenSet } from './oauth-token.js';
 import { awaitAuthorizationCode } from './oauth-loopback.js';
 import { buildAuthorizeUrl, createPkcePair, randomState } from './pkce.js';
-import { readRefreshToken as defaultRead, saveRefreshToken as defaultSave } from './token-file.js';
+import { readStoredGrant as defaultRead, saveStoredGrant as defaultSave, type StoredGrant } from './token-file.js';
 
 export interface AuthCodeDeps {
   tokenFile: string;
-  readRefreshToken?: (path: string, identity: string) => string | null;
-  saveRefreshToken?: (path: string, identity: string, token: string | null) => void;
-  refresh?: (oauth: ResolvedOAuth, refreshToken: string) => Promise<TokenSet>;
-  signIn?: (oauth: ResolvedOAuth) => Promise<TokenSet>;
+  readStoredGrant?: (path: string, identity: string) => StoredGrant | null;
+  saveStoredGrant?: (path: string, identity: string, grant: StoredGrant | null) => void;
+  refresh?: (oauth: ResolvedOAuth, refreshToken: string, verifier?: string) => Promise<TokenSet>;
+  /** Resolves with the tokens AND the verifier they are bound to. */
+  signIn?: (oauth: ResolvedOAuth) => Promise<TokenSet & { verifier?: string }>;
 }
 
 /** The stored-credential key. Same shape as the in-memory cache key, minus secrets. */
@@ -28,8 +29,13 @@ function identityOf(oauth: ResolvedOAuth): string {
  */
 function isCredentialDead(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  // The issuer answered, and what it said was that the grant is no good.
-  return /invalid_grant|invalid_token|unauthorized_client|expired|revoked/i.test(message);
+  // The issuer answered and refused — whatever it objected to, the stored
+  // credential cannot be used, and a browser sign-in is the recovery. Matching
+  // the status rather than a list of error codes: `invalid_request` from a
+  // rejected refresh is just as dead as `invalid_grant`, and guessing at the
+  // vocabulary is how a recoverable state becomes a server that never starts.
+  return /Token endpoint returned 4\d\d/.test(message)
+      || /invalid_grant|invalid_token|unauthorized_client|expired|revoked/i.test(message);
 }
 
 /**
@@ -38,7 +44,7 @@ function isCredentialDead(error: unknown): boolean {
  * Everything is logged to stderr. This process speaks MCP over stdout, so a
  * single stray stdout write would corrupt the protocol stream.
  */
-async function interactiveSignIn(oauth: ResolvedOAuth): Promise<TokenSet> {
+async function interactiveSignIn(oauth: ResolvedOAuth): Promise<TokenSet & { verifier?: string }> {
   const redirectUri = oauth.redirectUri!;
   const { verifier, challenge } = createPkcePair();
   const state = randomState();
@@ -58,7 +64,8 @@ async function interactiveSignIn(oauth: ResolvedOAuth): Promise<TokenSet> {
   const code = await awaitAuthorizationCode({ redirectUri, state, authorizeUrl });
   const tokens = await exchangeAuthorizationCode(oauth, { code, verifier, redirectUri });
   console.error('[oauth] Signed in. The refresh token is stored, so this will not be asked again.');
-  return tokens;
+  // The verifier travels with the tokens: JAS demands it again on every refresh.
+  return { ...tokens, verifier };
 }
 
 /**
@@ -72,9 +79,9 @@ async function interactiveSignIn(oauth: ResolvedOAuth): Promise<TokenSet> {
 export function createAuthorizationCodeRequester(
   deps: AuthCodeDeps
 ): (oauth: ResolvedOAuth) => Promise<TokenSet> {
-  const read = deps.readRefreshToken ?? defaultRead;
-  const save = deps.saveRefreshToken ?? defaultSave;
-  const refresh = deps.refresh ?? ((o, rt) => refreshAccessToken(o, rt));
+  const read = deps.readStoredGrant ?? defaultRead;
+  const save = deps.saveStoredGrant ?? defaultSave;
+  const refresh = deps.refresh ?? ((o, rt, v) => refreshAccessToken(o, rt, v));
   const signIn = deps.signIn ?? interactiveSignIn;
 
   const acquire = async (oauth: ResolvedOAuth): Promise<TokenSet> => {
@@ -99,10 +106,12 @@ export function createAuthorizationCodeRequester(
 
     if (stored) {
       try {
-        const tokens = await refresh(oauth, stored);
-        if (tokens.refreshToken && tokens.refreshToken !== stored) {
-          // The issuer rotated it; the old one may already be void.
-          save(deps.tokenFile, identity, tokens.refreshToken);
+        const tokens = await refresh(oauth, stored.refreshToken, stored.verifier);
+        if (tokens.refreshToken && tokens.refreshToken !== stored.refreshToken) {
+          // The issuer rotated it; the old one may already be void. The
+          // verifier carries forward — it belongs to the original grant, not
+          // to any one refresh token in the chain.
+          save(deps.tokenFile, identity, { refreshToken: tokens.refreshToken, verifier: stored.verifier });
         }
         return tokens;
       } catch (error) {
@@ -113,7 +122,9 @@ export function createAuthorizationCodeRequester(
     }
 
     const tokens = await signIn(oauth);
-    if (tokens.refreshToken) save(deps.tokenFile, identity, tokens.refreshToken);
+    if (tokens.refreshToken) {
+      save(deps.tokenFile, identity, { refreshToken: tokens.refreshToken, verifier: tokens.verifier });
+    }
     return tokens;
   };
 

@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
 
 /**
- * Refresh tokens on disk, so a browser sign-in is a once-ever event rather than
- * a once-per-restart one.
+ * The stored half of an OAuth grant, so a browser sign-in is a once-ever event
+ * rather than a once-per-restart one.
  *
  * A refresh token is a long-lived credential — it is the thing that lets this
  * process act as the user indefinitely — so the file is written 0600 and an
@@ -16,7 +16,21 @@ import { dirname } from 'node:path';
  * anything that reads as personal data.
  */
 
-type Store = Record<string, string>;
+export interface StoredGrant {
+  refreshToken: string;
+  /**
+   * The PKCE verifier the refresh token is bound to.
+   *
+   * RFC 6749 does not ask for `code_verifier` on a refresh, but IBM Jazz
+   * Authorization Server does when the original grant used PKCE: without it the
+   * token endpoint answers `CWOAU0033E: A required runtime parameter was
+   * missing: code_verifier`. So the verifier has to outlive the sign-in that
+   * produced it.
+   */
+  verifier?: string;
+}
+
+type Store = Record<string, StoredGrant | string>;
 
 function keyFor(identity: string): string {
   return createHash('sha256').update(identity).digest('hex').slice(0, 32);
@@ -34,17 +48,22 @@ function load(path: string): Store {
   }
 }
 
-/** The stored refresh token for this identity, or null. */
-export function readRefreshToken(path: string, identity: string): string | null {
+/** The stored grant for this identity, or null. */
+export function readStoredGrant(path: string, identity: string): StoredGrant | null {
   const value = load(path)[keyFor(identity)];
-  return typeof value === 'string' && value.length > 0 ? value : null;
+  // A bare string is the shape an earlier version wrote: a refresh token with
+  // no verifier. Readable rather than discarded, so an upgrade does not force
+  // a needless sign-in.
+  if (typeof value === 'string') return value.length > 0 ? { refreshToken: value } : null;
+  if (value && typeof value.refreshToken === 'string' && value.refreshToken.length > 0) return value;
+  return null;
 }
 
-/** Store (or, with null, forget) the refresh token for one identity. */
-export function saveRefreshToken(path: string, identity: string, token: string | null): void {
+/** Store (or, with null, forget) the grant for one identity. */
+export function saveStoredGrant(path: string, identity: string, grant: StoredGrant | null): void {
   const store = load(path);
   const key = keyFor(identity);
-  if (token) store[key] = token; else delete store[key];
+  if (grant) store[key] = grant; else delete store[key];
 
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });

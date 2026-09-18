@@ -161,17 +161,18 @@ describe('authorization code exchange and refresh', () => {
   it('refreshes with the refresh token and keeps the new one when the issuer rotates it', async () => {
     const { calls, fetchImpl } = capture({ access_token: 'AT2', expires_in: 3600, refresh_token: 'RT2' });
 
-    const tokens = await refreshAccessToken(oauth, 'RT1', fetchImpl);
+    const tokens = await refreshAccessToken(oauth, 'RT1', undefined, fetchImpl);
 
     const form = new URLSearchParams(calls[0][1].body);
     expect(form.get('grant_type')).toBe('refresh_token');
     expect(form.get('refresh_token')).toBe('RT1');
+    expect(form.has('code_verifier')).toBe(false);
     expect(tokens.refreshToken).toBe('RT2');
   });
 
   it('keeps the existing refresh token when the issuer returns none', async () => {
     const { fetchImpl } = capture({ access_token: 'AT2', expires_in: 3600 });
-    const tokens = await refreshAccessToken(oauth, 'RT1', fetchImpl);
+    const tokens = await refreshAccessToken(oauth, 'RT1', undefined, fetchImpl);
     // Dropping it here would force a browser sign-in on the next start.
     expect(tokens.refreshToken).toBe('RT1');
   });
@@ -180,8 +181,8 @@ describe('authorization code exchange and refresh', () => {
     const fetchImpl = (async () => ({
       ok: false, status: 400, text: async () => '{"error":"invalid_grant"}',
     })) as any;
-    await expect(refreshAccessToken(oauth, 'SECRET-RT', fetchImpl)).rejects.toThrow(/invalid_grant/);
-    await expect(refreshAccessToken(oauth, 'SECRET-RT', fetchImpl)).rejects.not.toThrow(/SECRET-RT/);
+    await expect(refreshAccessToken(oauth, 'SECRET-RT', undefined, fetchImpl)).rejects.toThrow(/invalid_grant/);
+    await expect(refreshAccessToken(oauth, 'SECRET-RT', undefined, fetchImpl)).rejects.not.toThrow(/SECRET-RT/);
   });
 });
 
@@ -192,5 +193,20 @@ describe('requestToken — the authorization code grant is not its job', () => {
       { ...oauth, grant: 'authorization_code' as const, redirectUri: 'http://127.0.0.1:8765/callback' },
       fetchImpl
     )).rejects.toThrow(/authorization_code.*createAuthorizationCodeRequester/s);
+  });
+});
+
+describe('refresh carries the PKCE verifier when there is one', () => {
+  it('sends code_verifier, which Jazz Authorization Server requires on a refresh', async () => {
+    const calls: any[] = [];
+    const fetchImpl = (async (_u: any, init: any) => {
+      calls.push(init);
+      return { ok: true, status: 200, json: async () => ({ access_token: 'AT', expires_in: 60 }) };
+    }) as any;
+
+    await refreshAccessToken(oauth, 'RT', 'THE-VERIFIER', fetchImpl);
+
+    // Without this, JAS answers CWOAU0033E and every restart needs a browser.
+    expect(new URLSearchParams(calls[0].body).get('code_verifier')).toBe('THE-VERIFIER');
   });
 });
