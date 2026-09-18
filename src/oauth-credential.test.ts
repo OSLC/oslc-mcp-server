@@ -195,3 +195,44 @@ describe('TokenStore — the authorization code grant', () => {
     expect(asAuthCode).not.toBe(asPassword);
   });
 });
+
+describe('the unauthenticated discovery entry point', () => {
+  const oa = { issuer: 'https://jas', clientId: 'c', clientSecret: 's',
+               grant: 'client_credentials' as const };
+
+  it('declines to authenticate rootservices, which is unprotected by specification', async () => {
+    const request = jest.fn<any>().mockResolvedValue({ accessToken: 'AT', expiresAt: Date.now() + 7200_000 });
+    const provider = createCredentialProvider(oa, { store: new TokenStore(request) });
+
+    await expect(provider({ url: 'https://elm.example.com/rm/rootservices', forceRefresh: false }))
+      .resolves.toBeNull();
+    // Returning null means oslc-client sends no host header and does not mark the
+    // request as provider-authenticated, so its own ladder still applies.
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('does not exchange a token merely to read rootservices, so a dead issuer cannot block discovery', async () => {
+    const request = jest.fn<any>().mockRejectedValue(new Error('token endpoint unreachable'));
+    const provider = createCredentialProvider(oa, { store: new TokenStore(request) });
+
+    // This is the bootstrap: rootservices carries the URLs needed to authenticate.
+    await expect(provider({ url: 'https://elm.example.com/cdcm/SPACE/rootservices', forceRefresh: false }))
+      .resolves.toBeNull();
+  });
+
+  it('still authenticates everything else', async () => {
+    const request = jest.fn<any>().mockResolvedValue({ accessToken: 'AT', expiresAt: Date.now() + 7200_000 });
+    const provider = createCredentialProvider(oa, { store: new TokenStore(request) });
+
+    await expect(provider({ url: 'https://elm.example.com/rm/oslc_rm/catalog', forceRefresh: false }))
+      .resolves.toBe('Bearer AT');
+  });
+
+  it('is not fooled by a path that merely contains the word', async () => {
+    const request = jest.fn<any>().mockResolvedValue({ accessToken: 'AT', expiresAt: Date.now() + 7200_000 });
+    const provider = createCredentialProvider(oa, { store: new TokenStore(request) });
+
+    await expect(provider({ url: 'https://x/rm/rootservices/child', forceRefresh: false }))
+      .resolves.toBe('Bearer AT');
+  });
+});

@@ -80,10 +80,31 @@ export function createCredentialProvider(
   deps: { request?: TokenRequest; store?: TokenStore } = {}
 ): (ctx: { url: string; forceRefresh: boolean }) => Promise<string | null> {
   const store = deps.store ?? new TokenStore(deps.request);
-  return async ({ forceRefresh }) => {
+  return async ({ url, forceRefresh }) => {
+    if (isUnauthenticatedEntryPoint(url)) return null;
     const tokens = await store.get(oauth, forceRefresh);
     return `Bearer ${tokens.accessToken}`;
   };
+}
+
+/**
+ * `rootservices` is unprotected by specification, and deliberately so: it is
+ * where a client learns the URLs it needs IN ORDER TO authenticate. Requiring a
+ * token to read it inverts the bootstrap — discovery starts there, so a token
+ * that cannot be obtained takes down a request that never needed one.
+ *
+ * Returning null rather than a header also leaves the request unmarked, so
+ * oslc-client does not treat it as provider-authenticated and its own auth
+ * ladder still applies if some deployment does protect it after all.
+ */
+function isUnauthenticatedEntryPoint(url: string): boolean {
+  try {
+    // Compare the path, not the whole URL: a query string or a resource called
+    // `…/rootservices/child` must not match.
+    return new URL(url).pathname.replace(/\/+$/, '').endsWith('/rootservices');
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -79,3 +79,26 @@ describe('createAuthorizationCodeRequester', () => {
       .rejects.toThrow(/redirectUri/);
   });
 });
+
+describe('reporting a failure', () => {
+  it('says why on stderr, because oslc-client re-wraps the cause out of sight', async () => {
+    const warn = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const d = deps({ signIn: jest.fn<any>().mockRejectedValue(new Error('token endpoint refused the code')) });
+
+    await expect(createAuthorizationCodeRequester(d)(oauth)).rejects.toThrow('token endpoint refused the code');
+
+    const said = warn.mock.calls.map(c => c.join(' ')).join('\n');
+    expect(said).toMatch(/token endpoint refused the code/);
+    expect(said).toMatch(/jas\.example\.com/);
+    warn.mockRestore();
+  });
+
+  it('reports a configuration failure too, not only an exchange failure', async () => {
+    const warn = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(createAuthorizationCodeRequester(deps())({ ...oauth, redirectUri: undefined }))
+      .rejects.toThrow(/redirectUri/);
+
+    expect(warn.mock.calls.map(c => c.join(' ')).join('\n')).toMatch(/redirectUri/);
+    warn.mockRestore();
+  });
+});

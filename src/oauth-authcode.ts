@@ -77,7 +77,7 @@ export function createAuthorizationCodeRequester(
   const refresh = deps.refresh ?? ((o, rt) => refreshAccessToken(o, rt));
   const signIn = deps.signIn ?? interactiveSignIn;
 
-  return async (oauth: ResolvedOAuth): Promise<TokenSet> => {
+  const acquire = async (oauth: ResolvedOAuth): Promise<TokenSet> => {
     if (!oauth.redirectUri) {
       throw new Error(
         `Issuer ${oauth.issuer}: the authorization_code grant needs \`redirectUri\`, ` +
@@ -115,5 +115,22 @@ export function createAuthorizationCodeRequester(
     const tokens = await signIn(oauth);
     if (tokens.refreshToken) save(deps.tokenFile, identity, tokens.refreshToken);
     return tokens;
+  };
+
+  // Say why, here, where the reason still exists.
+  //
+  // oslc-client wraps whatever this throws in a CredentialRejectedError, and
+  // the caller above that re-wraps using only `.message` — so by the time a
+  // failure reaches the console it reads "Credential provider failed: <url>"
+  // with the actual cause stripped off. That is unactionable, and it is the
+  // error an operator will be staring at.
+  return async (oauth: ResolvedOAuth): Promise<TokenSet> => {
+    try {
+      return await acquire(oauth);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[oauth] Could not obtain a token from ${oauth.issuer}: ${reason}`);
+      throw error;
+    }
   };
 }
