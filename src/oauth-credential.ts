@@ -70,6 +70,26 @@ export class TokenStore {
  * discovery fetches many resources concurrently: without it, an expired token
  * makes every in-flight request start its own exchange.
  *
+ * Every request is authenticated, `rootservices` included. That looks wrong,
+ * since rootservices is where a client learns the URLs it needs IN ORDER TO
+ * authenticate, so an exemption was tried. Measured against trs-filter on
+ * 2026-09-18, unauthenticated vs. a bearer token the server cannot validate:
+ *
+ *     /cdcm/<space>/rootservices   200   401
+ *     /rm/rootservices             200   200
+ *     /api/rootservices  (RSE)     200   200
+ *
+ * So CDCM reaches rootservices without a credential but VALIDATES an
+ * Authorization header whenever one is present, while ELM and RSE ignore it.
+ * Authenticating everything is therefore both correct here — a valid token
+ * passes CDCM's check — and robust to a deployment that requires a credential
+ * on rootservices outright, which an exemption would break with a bare
+ * `WWW-Authenticate: Bearer` carrying no token_uri for oslc-client's ladder.
+ *
+ * It costs an OAuth-configured server nothing: it needs the token for every
+ * other request anyway, so deferring it merely moves the failure. A stale
+ * token 401s here and is refreshed and retried like any other rejection.
+ *
  * A caller arriving with `forceRefresh` while an exchange is already in flight
  * joins it rather than starting another. That is safe because the exchange
  * always mints a NEW token at the endpoint; it can never hand back the one the
@@ -80,31 +100,10 @@ export function createCredentialProvider(
   deps: { request?: TokenRequest; store?: TokenStore } = {}
 ): (ctx: { url: string; forceRefresh: boolean }) => Promise<string | null> {
   const store = deps.store ?? new TokenStore(deps.request);
-  return async ({ url, forceRefresh }) => {
-    if (isUnauthenticatedEntryPoint(url)) return null;
+  return async ({ forceRefresh }) => {
     const tokens = await store.get(oauth, forceRefresh);
     return `Bearer ${tokens.accessToken}`;
   };
-}
-
-/**
- * `rootservices` is unprotected by specification, and deliberately so: it is
- * where a client learns the URLs it needs IN ORDER TO authenticate. Requiring a
- * token to read it inverts the bootstrap — discovery starts there, so a token
- * that cannot be obtained takes down a request that never needed one.
- *
- * Returning null rather than a header also leaves the request unmarked, so
- * oslc-client does not treat it as provider-authenticated and its own auth
- * ladder still applies if some deployment does protect it after all.
- */
-function isUnauthenticatedEntryPoint(url: string): boolean {
-  try {
-    // Compare the path, not the whole URL: a query string or a resource called
-    // `…/rootservices/child` must not match.
-    return new URL(url).pathname.replace(/\/+$/, '').endsWith('/rootservices');
-  } catch {
-    return false;
-  }
 }
 
 /**
