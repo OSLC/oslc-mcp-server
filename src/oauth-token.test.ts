@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { requestClientCredentialsToken, requestToken } from './oauth-token.js';
+import { requestClientCredentialsToken, requestToken, exchangeAuthorizationCode, refreshAccessToken } from './oauth-token.js';
 
 const oauth = {
   issuer: 'https://jas.example.com/oidc/endpoint/jazzop',
@@ -123,5 +123,64 @@ describe('requestToken — password grant', () => {
 
     await expect(requestToken(userOauth, fetchImpl)).rejects.toThrow(/invalid_grant/);
     await expect(requestToken(userOauth, fetchImpl)).rejects.not.toThrow(/pw|s3cret/);
+  });
+});
+
+describe('authorization code exchange and refresh', () => {
+  function capture(body: unknown) {
+    const calls: any[] = [];
+    const fetchImpl = (async (url: any, init: any) => {
+      calls.push([url, init]);
+      return { ok: true, status: 200, json: async () => body };
+    }) as any;
+    return { calls, fetchImpl };
+  }
+
+  it('redeems the code with the verifier and the same redirect_uri', async () => {
+    const { calls, fetchImpl } = capture({ access_token: 'AT', expires_in: 3600, refresh_token: 'RT' });
+
+    const tokens = await exchangeAuthorizationCode(
+      oauth, { code: 'CODE', verifier: 'VERIFIER', redirectUri: 'http://127.0.0.1:8765/callback' }, fetchImpl);
+
+    const form = new URLSearchParams(calls[0][1].body);
+    expect(form.get('grant_type')).toBe('authorization_code');
+    expect(form.get('code')).toBe('CODE');
+    expect(form.get('code_verifier')).toBe('VERIFIER');
+    // RFC 6749 4.1.3: redirect_uri must be repeated and must match the authorize request.
+    expect(form.get('redirect_uri')).toBe('http://127.0.0.1:8765/callback');
+    expect(tokens.accessToken).toBe('AT');
+    expect(tokens.refreshToken).toBe('RT');
+  });
+
+  it('does not send scope on the code exchange, which would narrow the grant', async () => {
+    const { calls, fetchImpl } = capture({ access_token: 'AT', expires_in: 60 });
+    await exchangeAuthorizationCode(oauth, { code: 'C', verifier: 'V', redirectUri: 'http://x/cb' }, fetchImpl);
+    expect(new URLSearchParams(calls[0][1].body).has('scope')).toBe(false);
+  });
+
+  it('refreshes with the refresh token and keeps the new one when the issuer rotates it', async () => {
+    const { calls, fetchImpl } = capture({ access_token: 'AT2', expires_in: 3600, refresh_token: 'RT2' });
+
+    const tokens = await refreshAccessToken(oauth, 'RT1', fetchImpl);
+
+    const form = new URLSearchParams(calls[0][1].body);
+    expect(form.get('grant_type')).toBe('refresh_token');
+    expect(form.get('refresh_token')).toBe('RT1');
+    expect(tokens.refreshToken).toBe('RT2');
+  });
+
+  it('keeps the existing refresh token when the issuer returns none', async () => {
+    const { fetchImpl } = capture({ access_token: 'AT2', expires_in: 3600 });
+    const tokens = await refreshAccessToken(oauth, 'RT1', fetchImpl);
+    // Dropping it here would force a browser sign-in on the next start.
+    expect(tokens.refreshToken).toBe('RT1');
+  });
+
+  it('never puts the refresh token in an error when the exchange fails', async () => {
+    const fetchImpl = (async () => ({
+      ok: false, status: 400, text: async () => '{"error":"invalid_grant"}',
+    })) as any;
+    await expect(refreshAccessToken(oauth, 'SECRET-RT', fetchImpl)).rejects.toThrow(/invalid_grant/);
+    await expect(refreshAccessToken(oauth, 'SECRET-RT', fetchImpl)).rejects.not.toThrow(/SECRET-RT/);
   });
 });

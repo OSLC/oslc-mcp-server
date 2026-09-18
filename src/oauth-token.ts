@@ -4,6 +4,11 @@ export interface TokenSet {
   accessToken: string;
   /** Epoch milliseconds. */
   expiresAt: number;
+  /**
+   * Present for the authorization code flow. Persisting it is what makes the
+   * browser sign-in a once-ever event rather than a once-per-restart one.
+   */
+  refreshToken?: string;
 }
 
 /**
@@ -57,6 +62,49 @@ export async function requestPasswordToken(
 }
 
 /**
+ * Redeem an authorization code (RFC 6749 §4.1.3).
+ *
+ * `redirect_uri` is repeated here even though no redirect happens: the issuer
+ * compares it with the one from the authorize request, and a mismatch is
+ * rejected. `code_verifier` is the PKCE half that never travelled in a URL.
+ */
+export async function exchangeAuthorizationCode(
+  oauth: ResolvedOAuth,
+  params: { code: string; verifier: string; redirectUri: string },
+  fetchImpl: typeof fetch = fetch
+): Promise<TokenSet> {
+  const form = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code: params.code,
+    code_verifier: params.verifier,
+    redirect_uri: params.redirectUri,
+  });
+  // No scope here, deliberately: the grant's scope was fixed at the authorize
+  // step, and repeating it can only narrow what was already approved.
+  return postTokenRequest(oauth, form, fetchImpl, { withScope: false });
+}
+
+/**
+ * Exchange a refresh token for a fresh access token.
+ *
+ * The issuer may or may not rotate the refresh token. When it returns a new
+ * one we keep that; when it returns none we carry the old one forward, because
+ * dropping it would force a browser sign-in on the next start.
+ */
+export async function refreshAccessToken(
+  oauth: ResolvedOAuth,
+  refreshToken: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<TokenSet> {
+  const form = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+  const tokens = await postTokenRequest(oauth, form, fetchImpl, { withScope: false });
+  return { ...tokens, refreshToken: tokens.refreshToken ?? refreshToken };
+}
+
+/**
  * Dispatch to the configured grant. One entry point so the token cache does not
  * have to know which grant produced a token.
  */
@@ -77,13 +125,14 @@ export async function requestToken(
 async function postTokenRequest(
   oauth: ResolvedOAuth,
   form: URLSearchParams,
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  opts: { withScope?: boolean } = {}
 ): Promise<TokenSet> {
   const endpoint = `${oauth.issuer.replace(/\/+$/, '')}/token`;
 
   // Deliberately absent unless configured: a wrong scope authenticates and then
   // fails authorization, which is harder to diagnose than no scope at all.
-  if (oauth.scope) form.set('scope', oauth.scope);
+  if (oauth.scope && opts.withScope !== false) form.set('scope', oauth.scope);
 
   const basic = Buffer.from(`${oauth.clientId}:${oauth.clientSecret}`).toString('base64');
   const response = await fetchImpl(endpoint, {
@@ -121,5 +170,6 @@ async function postTokenRequest(
     // Absent expires_in means "expired now", so the next request re-fetches
     // rather than reusing a token of unknown lifetime forever.
     expiresAt: Date.now() + (Number(body.expires_in) || 0) * 1000,
+    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : undefined,
   };
 }
