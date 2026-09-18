@@ -49,6 +49,15 @@
 #
 # WHOSE IDENTITY. `grant` decides, and the default follows what the server
 # already has:
+#   authorization_code   you sign in at a browser once; the refresh token is
+#                        stored 0600 in .oslc-mcp-tokens.json beside this file
+#                        and every later start is silent. Needs `redirectUri`,
+#                        which must be loopback (RFC 8252) and registered on
+#                        the client. REQUIRED for IBM Jazz Authorization
+#                        Server, which reads grant_type=password as Liberty's
+#                        app-password exchange rather than RFC 6749 resource
+#                        owner credentials and rejects a registry password
+#                        with CWOAU0074E.
 #   password             (default when `credentials` is set)
 #                        exchanges that username and password for a token
 #                        representing THE USER. Prefer this where there is a

@@ -79,6 +79,7 @@ servers:
 | `oauth.clientId` / `clientIdEnv` | yes, within the block | — |
 | `oauth.clientSecret` / `clientSecretEnv` | yes, within the block | — |
 | `oauth.grant` | no | `password` when `credentials` is set, else `client_credentials` |
+| `oauth.redirectUri` | yes for `authorization_code` | — must be loopback and registered on the client |
 | `oauth.scope` | no | **none — not defaulted.** See below |
 | `serviceProviders` | no | absent means walk the whole catalog |
 | `serviceProviders[].uri` | yes, within the list | — |
@@ -111,10 +112,31 @@ This server obtains its own token, caches it with a refresh margin, and renews i
 
 | `grant` | Token represents | Needs |
 |---|---|---|
+| `authorization_code` | **the user who signs in** at the browser | `redirectUri`, registered on the client |
 | `password` (default when `credentials` is set) | **the user** named by `credentials` | `credentials` plus the OAuth client |
 | `client_credentials` (default without `credentials`) | the OAuth **client** itself, no user | the OAuth client only |
 
 Prefer `password` where there is a user to represent. A deployment's access rules are written about people — CDCM's `requireReadAccessInConfigurationArea` tests whichever identity the token carries — so a service-principal token sees what *it* can see, not what you can see, and every change is attributed to the client in the audit log. The server states which grant and which identity it is using at startup, so this never has to be discovered from an audit log afterwards.
+
+**`authorization_code` — the interactive flow.** Use it where the issuer will not accept a password directly. IBM Jazz Authorization Server is one such: it reads `grant_type=password` as WebSphere Liberty's **app-password** exchange rather than as RFC 6749 resource-owner credentials, so a correct registry password is answered with `CWOAU0074E … could not verify the application password`.
+
+```yaml
+    oauth:
+      issuer: https://elm.example.com/oidc/endpoint/jazzop
+      clientId: resource-navigator
+      clientSecretEnv: ELM_SECRET
+      grant: authorization_code
+      redirectUri: http://127.0.0.1:8765/callback   # must match one registered on the client
+      scope: general
+```
+
+The first start opens your browser, serves the redirect on that loopback port once, and redeems the code with PKCE (S256). The **refresh token is then stored 0600** in `.oslc-mcp-tokens.json` beside the configuration, so every later start is silent — that is what makes the flow practical for a server an MCP client launches rather than a person at a prompt. If no browser can be opened the authorize URL is printed instead; nothing is fatal about a headless host except that somebody must visit the URL.
+
+`redirectUri` must be **loopback** (`127.0.0.1`, `::1` or `localhost`) — RFC 8252 §7.3. A server launched by an MCP client is not registered as a protocol handler, so a custom scheme could never reach it, and a remote redirect URI would send the code somewhere this process cannot read.
+
+A refused refresh signs in again and clears the dead token. A *network* failure does neither: opening a browser because a proxy blipped would be hostile to a server running unattended.
+
+Because the cache is keyed by identity rather than by server, **one sign-in covers the whole estate** — five entries behind one issuer share one token and one browser visit.
 
 > OAuth 2.1 drops the password grant because a third-party client should never handle a user's password. That reasoning does not bite here: this process already holds the password and already submits it to the same organisation's token endpoint over oslc-client's JAS bearer path, so the grant adds no exposure that was not already present. For a host with a browser and a user at the keyboard — Resource Navigator, say — authorization code with PKCE remains the right choice.
 
