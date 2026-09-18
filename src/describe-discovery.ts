@@ -43,6 +43,8 @@ function describeCatalogSource(catalog: CatalogResolution): string {
       return 'explicit configuration';
     case 'rootservices':
       return `rootservices predicate ${catalog.source.predicate}`;
+    case 'unresolved':
+      return `no catalog — ${catalog.source.reason}`;
   }
 }
 

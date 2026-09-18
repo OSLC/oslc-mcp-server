@@ -98,6 +98,13 @@ export async function resolveConfigurationCatalogUrl(
  */
 export type CatalogSource =
   | { kind: 'explicit' }
+  /**
+   * No catalog, and that is not a failure. A server scoped with
+   * `serviceProviders` never fetches one — discoverFromServiceProviders takes
+   * the URI for reporting only — and a rootservices document may legitimately
+   * advertise no catalog this client recognises.
+   */
+  | { kind: 'unresolved'; reason: string }
   | { kind: 'rootservices'; predicate: string };
 
 export interface CatalogResolution {
@@ -156,4 +163,9 @@ export async function resolveCatalogUrl(
     `Set catalogUrl for this server explicitly, or have the server advertise one of: ` +
     `${CATALOG_PREDICATES.join(', ')}`
   );
+}
+
+/** A catalog that was never resolved, carrying why. See `CatalogSource`. */
+export function unresolvedCatalog(reason: string): CatalogResolution {
+  return { url: '', source: { kind: 'unresolved', reason } };
 }

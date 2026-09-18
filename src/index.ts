@@ -9,7 +9,7 @@ import { resolveCredentials, resolveOAuth } from './credentials.js';
 import { buildClientOptions, TokenStore } from './oauth-credential.js';
 import { createAuthorizationCodeRequester } from './oauth-authcode.js';
 import { requestToken } from './oauth-token.js';
-import { resolveCatalogUrl } from './catalog-resolution.js';
+import { resolveCatalogUrl, unresolvedCatalog, type CatalogResolution } from './catalog-resolution.js';
 import type { ResolvedServer } from './server-config.js';
 
 interface CliArgs {
@@ -176,11 +176,36 @@ async function main(): Promise<void> {
     );
 
     // An explicit value, else whatever rootservices advertises. Never a guess.
-    const catalog = await resolveCatalogUrl(
-      client, config.serverURL, config.catalogURL || undefined
-    );
+    //
+    // A catalog is not always needed, and not having one is not always a fault:
+    //   - Scoped discovery never fetches the catalog at all
+    //     (discoverFromServiceProviders takes the URI for reporting only, and
+    //     says "catalog not fetched"), so looking one up is wasted work — and
+    //     failing startup over a lookup whose answer is never read is worse.
+    //   - A rootservices document may legitimately advertise no catalog this
+    //     client recognises. For a scoped server that is simply irrelevant.
+    let catalog: CatalogResolution;
+    if (serviceProviderURIs.length > 0 && !config.catalogURL) {
+      catalog = unresolvedCatalog('scoped to serviceProviders, which does not fetch a catalog');
+    } else {
+      try {
+        catalog = await resolveCatalogUrl(client, config.serverURL, config.catalogURL || undefined);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        // One server's missing catalog must not take down the others. Without a
+        // catalog an UNSCOPED server has nothing to enumerate, so it is left
+        // out rather than started with no tools and no explanation.
+        console.error(`[startup] ${alias}: ${reason}`);
+        console.error(`[startup] ${alias}: skipped — the other servers still start.`);
+        continue;
+      }
+    }
     config.catalogURL = catalog.url;
-    console.error(`[startup] ${alias}: catalog ${catalog.url} (${catalog.source.kind})`);
+    console.error(
+      catalog.url
+        ? `[startup] ${alias}: catalog ${catalog.url} (${catalog.source.kind})`
+        : `[startup] ${alias}: no catalog needed (scoped to ${serviceProviderURIs.length} service provider(s))`
+    );
 
     const discovery = serviceProviderURIs.length > 0
       ? await discoverFromServiceProviders(client, serviceProviderURIs, config.catalogURL)
@@ -194,6 +219,13 @@ async function main(): Promise<void> {
       catalog,
       prefix: prefixTools ? `${alias}_` : '',
     });
+  }
+
+  if (started.length === 0) {
+    // Every server was skipped: there is nothing to serve, and starting an
+    // empty MCP server would look like success.
+    console.error('[fatal] No server could be started. See the [startup] lines above.');
+    process.exit(1);
   }
 
   await startServer(started, { reportPath, reportBaseDir, probeOslc: args.probeOslc });
