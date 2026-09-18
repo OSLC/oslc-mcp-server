@@ -40,7 +40,9 @@ export interface OAuthEntry {
    * Defaults to `password` when the server also configures `credentials`, and
    * to `client_credentials` when it does not.
    */
-  grant?: 'password' | 'client_credentials';
+  grant?: 'password' | 'client_credentials' | 'authorization_code';
+  /** Loopback redirect for `authorization_code`, e.g. http://127.0.0.1:8765/callback. */
+  redirectUri?: string;
   /**
    * Deployment-specific and deliberately not defaulted: a service account's
    * scope is not a user's. CDCM service integrations use `service-user-roles`;
@@ -172,6 +174,7 @@ export function parseConfigFile(yamlText: string): ConfigFile {
         clientSecret: str(o.clientSecret),
         clientSecretEnv: str(o.clientSecretEnv),
         grant: str(o.grant) as OAuthEntry['grant'],
+        redirectUri: str(o.redirectUri),
         scope: str(o.scope),
       };
       // Keyed on the SECRET, not the client id. A client id is an identifier,

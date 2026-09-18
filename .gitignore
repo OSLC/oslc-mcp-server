@@ -12,3 +12,9 @@ oslc-mcp-server*.yaml
 # Discovery reports — generated, rewritten on every server start. One per config:
 # `reportPath` in each oslc-mcp-server*.yaml names its own file.
 oslc-discovery*.md
+
+# Stored OAuth refresh tokens. A refresh token lets this process act as the
+# user who signed in, for as long as the issuer honours it — a live credential,
+# never a committed one. Written 0600 beside the configuration that named the
+# issuer.
+.oslc-mcp-tokens.json

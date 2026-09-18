@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
+import { join } from 'node:path';
 import { OSLCClient } from 'oslc-client';
 import { discover, discoverFromServiceProviders } from './discovery.js';
 import { startServer, type StartedServer } from './server.js';
 import { loadConfigFile } from './config-file.js';
 import { resolveCredentials, resolveOAuth } from './credentials.js';
 import { buildClientOptions, TokenStore } from './oauth-credential.js';
+import { createAuthorizationCodeRequester } from './oauth-authcode.js';
+import { requestToken } from './oauth-token.js';
 import { resolveCatalogUrl } from './catalog-resolution.js';
 import type { ResolvedServer } from './server-config.js';
 
@@ -125,10 +128,20 @@ async function main(): Promise<void> {
   const { servers, reportPath, reportBaseDir } = resolveServers(args);
   const prefixTools = servers.length > 1;
 
+  // Refresh tokens live beside the configuration that named the issuer, not in
+  // the working directory — where the server is launched from must not decide
+  // whether it has to ask you to sign in again.
+  const tokenFile = join(reportBaseDir ?? process.cwd(), '.oslc-mcp-tokens.json');
+  const signInInteractively = createAuthorizationCodeRequester({ tokenFile });
+
   // One store for the process, so servers sharing an identity share a token:
   // five entries behind one issuer exchange one token, not five, and a
-  // rejection on any of them refreshes the credential all of them use.
-  const tokens = new TokenStore();
+  // rejection on any of them refreshes the credential all of them use. With the
+  // authorization code grant that also means ONE browser sign-in for the whole
+  // estate rather than one per server.
+  const tokens = new TokenStore((oauth) =>
+    oauth.grant === 'authorization_code' ? signInInteractively(oauth) : requestToken(oauth)
+  );
 
   const started: StartedServer[] = [];
   for (const server of servers) {
@@ -146,6 +159,9 @@ async function main(): Promise<void> {
         o.grant === 'password'
           ? `[startup] ${alias}: OAuth password grant as \`${o.username}\` via client ` +
             `\`${o.clientId}\` — changes are attributed to that user`
+          : o.grant === 'authorization_code'
+          ? `[startup] ${alias}: OAuth authorization code via client \`${o.clientId}\` — ` +
+            `changes are attributed to whoever signs in at the browser`
           : `[startup] ${alias}: OAuth client credentials as \`${o.clientId}\` — changes ` +
             `will be attributed to this service account, not to a user, and it sees what ` +
             `that account can see`

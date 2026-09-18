@@ -37,7 +37,7 @@ export function resolveCredentials(
 }
 
 /** Which OAuth grant obtains the token, and therefore whose identity it carries. */
-export type OAuthGrant = 'password' | 'client_credentials';
+export type OAuthGrant = 'password' | 'client_credentials' | 'authorization_code';
 
 /** A server's OAuth configuration, with every reference resolved. */
 export interface ResolvedOAuth {
@@ -55,6 +55,11 @@ export interface ResolvedOAuth {
   /** The resource owner, for the password grant only. */
   username?: string;
   password?: string;
+  /**
+   * Loopback redirect for the authorization code grant. Must match one
+   * registered on the OAuth client exactly.
+   */
+  redirectUri?: string;
 }
 
 /**
@@ -103,13 +108,21 @@ export function resolveOAuth(
   const { username, password } = resolveCredentials(server, env);
   const hasUser = Boolean(username && password);
 
-  if (oauth.grant !== undefined && oauth.grant !== 'password' && oauth.grant !== 'client_credentials') {
+  const known: OAuthGrant[] = ['password', 'client_credentials', 'authorization_code'];
+  if (oauth.grant !== undefined && !known.includes(oauth.grant as OAuthGrant)) {
     throw new Error(
       `Server \`${server.alias}\`: unknown oauth \`grant\` \`${oauth.grant}\` — ` +
-      `use \`password\` or \`client_credentials\`.`
+      `use ${known.map(g => `\`${g}\``).join(', ')}.`
     );
   }
   const grant: OAuthGrant = oauth.grant ?? (hasUser ? 'password' : 'client_credentials');
+
+  if (grant === 'authorization_code' && !oauth.redirectUri) {
+    throw new Error(
+      `Server \`${server.alias}\`: the \`authorization_code\` grant needs \`redirectUri\`, ` +
+      `which must exactly match one registered on the OAuth client.`
+    );
+  }
 
   if (grant === 'password' && !hasUser) {
     throw new Error(
@@ -124,9 +137,10 @@ export function resolveOAuth(
     clientSecret,
     scope: oauth.scope,
     grant,
-    // Carried only for the grant that uses them: a service-principal token must
-    // not drag the user's password along with it.
+    // Carried only for the grant that uses them: neither a service-principal
+    // token nor a browser sign-in should drag the user's password along.
     username: grant === 'password' ? username : undefined,
     password: grant === 'password' ? password : undefined,
+    redirectUri: grant === 'authorization_code' ? oauth.redirectUri : undefined,
   };
 }

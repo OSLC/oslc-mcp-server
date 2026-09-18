@@ -166,3 +166,32 @@ describe('TokenStore — one token per identity, shared across servers', () => {
     expect(key).toMatch(/jas/);
   });
 });
+
+describe('TokenStore — the authorization code grant', () => {
+  const authcode = {
+    issuer: 'https://jas', clientId: 'c', clientSecret: 's', scope: 'general',
+    grant: 'authorization_code' as const, redirectUri: 'http://127.0.0.1:8765/callback',
+  };
+
+  it('signs in once and shares the result across every server on that identity', async () => {
+    const request = jest.fn<any>().mockResolvedValue({
+      accessToken: 'AT', expiresAt: Date.now() + 3600_000, refreshToken: 'RT',
+    });
+    const store = new TokenStore(request);
+
+    const cdcm = buildClientOptions(authcode, store).getAuthorization!;
+    const rse = buildClientOptions({ ...authcode }, store).getAuthorization!;
+
+    await expect(cdcm({ url: 'https://cdcm/x', forceRefresh: false })).resolves.toBe('Bearer AT');
+    await expect(rse({ url: 'https://rse/y', forceRefresh: false })).resolves.toBe('Bearer AT');
+    // One browser sign-in, not one per server.
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the authorization code identity apart from a password one', () => {
+    const store = new TokenStore(jest.fn<any>());
+    const asAuthCode = store.identityOf(authcode);
+    const asPassword = store.identityOf({ ...authcode, grant: 'password', username: 'jamsden' });
+    expect(asAuthCode).not.toBe(asPassword);
+  });
+});

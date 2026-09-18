@@ -184,3 +184,13 @@ describe('authorization code exchange and refresh', () => {
     await expect(refreshAccessToken(oauth, 'SECRET-RT', fetchImpl)).rejects.not.toThrow(/SECRET-RT/);
   });
 });
+
+describe('requestToken — the authorization code grant is not its job', () => {
+  it('refuses rather than silently falling through to client credentials', async () => {
+    const fetchImpl = (async () => { throw new Error('must not be called'); }) as any;
+    await expect(requestToken(
+      { ...oauth, grant: 'authorization_code' as const, redirectUri: 'http://127.0.0.1:8765/callback' },
+      fetchImpl
+    )).rejects.toThrow(/authorization_code.*createAuthorizationCodeRequester/s);
+  });
+});

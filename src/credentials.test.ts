@@ -147,3 +147,39 @@ describe('resolveOAuth — grant selection and the resource owner', () => {
     )).toThrow(/cdcm.*credentials/i);
   });
 });
+
+describe('resolveOAuth — authorization code grant', () => {
+  const entry = (oauth: any) => ({ alias: 'cdcm', baseUrl: 'https://x', oauth } as any);
+
+  it('carries the redirect URI and needs no user, since the browser supplies one', () => {
+    const resolved = resolveOAuth(entry({
+      issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS',
+      grant: 'authorization_code', redirectUri: 'http://127.0.0.1:8765/callback', scope: 'general',
+    }), { CS: 'sec' });
+
+    expect(resolved).toMatchObject({
+      grant: 'authorization_code',
+      redirectUri: 'http://127.0.0.1:8765/callback',
+    });
+    // The user signs in at the browser; no configured password is involved.
+    expect(resolved!.password).toBeUndefined();
+  });
+
+  it('does not silently borrow credentials into the authorization code grant', () => {
+    const resolved = resolveOAuth({
+      alias: 'cdcm', baseUrl: 'https://x',
+      credentials: { usernameEnv: 'U', passwordEnv: 'P' },
+      oauth: { issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS',
+               grant: 'authorization_code', redirectUri: 'http://127.0.0.1:8765/callback' },
+    } as any, { CS: 'sec', U: 'jamsden', P: 'pw' });
+
+    expect(resolved!.username).toBeUndefined();
+    expect(resolved!.password).toBeUndefined();
+  });
+
+  it('names the server when authorization_code has no redirectUri', () => {
+    expect(() => resolveOAuth(entry({
+      issuer: 'https://i', clientId: 'c', clientSecretEnv: 'CS', grant: 'authorization_code',
+    }), { CS: 'sec' })).toThrow(/cdcm.*redirectUri/);
+  });
+});

@@ -112,6 +112,16 @@ export async function requestToken(
   oauth: ResolvedOAuth,
   fetchImpl: typeof fetch = fetch
 ): Promise<TokenSet> {
+  if (oauth.grant === 'authorization_code') {
+    // Not a silent fall-through to client credentials: that would quietly swap
+    // the user's identity for the service principal's, which is the whole
+    // distinction the grant was chosen for. The interactive flow needs a
+    // browser and a token file, so it is assembled by its own factory.
+    throw new Error(
+      'The authorization_code grant cannot be run from requestToken — it needs a browser ' +
+      'and a refresh-token store. Use createAuthorizationCodeRequester() from oauth-authcode.js.'
+    );
+  }
   return oauth.grant === 'password'
     ? requestPasswordToken(oauth, fetchImpl)
     : requestClientCredentialsToken(oauth, fetchImpl);
