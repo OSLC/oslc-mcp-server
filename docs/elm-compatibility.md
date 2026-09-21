@@ -1243,7 +1243,12 @@ than unwound, and expect the web UI to be the cleanup tool of last resort.
 
 ---
 
-### 39. ETM resolves `validatesArchitectureElement` targets, so linking to RSE needs a friend
+### 39. ETM resolves `validatesArchitectureElement` targets, and reports the failure as the resource's
+
+> **Superseded in part by quirk 41.** The diagnosis below — that a missing friend or project-area
+> association was to blame — is **wrong**, and is kept because the elimination is what led to the
+> real cause. The friend exists in both directions and the association exists; RSE refuses ELM's
+> fetch because of its `Accept` header. Read quirk 41 for the cause; read this for what was ruled out.
 
 Every other cross-server link in this dataset writes without any consumer or friend configuration:
 RSE → DOORS Next (`jazz_am:satisfy`, `jazz_am:trace`), ETM → DOORS Next
@@ -1275,12 +1280,11 @@ Three things this rules out, so nobody repeats them:
 - **Not the target server's authentication.** The same bearer token reads the RSE resource fine; it
   is ETM's own server-side resolution that fails, and ETM authenticates as itself, not as the caller.
 
-The cause is that the ETM project area has **no AM service provider at all** — no friend on the ELM
-JTS points at the RSE host. Confirm with the project area's associations and with a grep of
-`/jts/rootservices`. The fix is a friend registration plus a project-area association; RSE advertises
-everything that needs (`jfs:oauthRequestTokenUrl`, `jfs:oauthAccessTokenUrl`,
-`jfs:oauthUserAuthorizationUrl`, `jfs:oauthRequestConsumerKeyUrl`, and `oslc_am:amServiceProviders`)
-in `/api/rootservices`.
+~~The cause is that the ETM project area has no AM service provider at all.~~ **Wrong.** That was
+inferred from a grep of `/jts/rootservices`, which does not list friends — the wrong test. `/qm/friends`
+does, and it lists RSE. The project-area association was genuinely absent and has since been added
+(it appears on the ETM side as link-type `validates-architecture-elements`); adding it changed
+nothing. See quirk 41.
 
 **There is no way around it from the other side.** RSE's AM shape — creation and resource both —
 offers only `rm:Requirement`-ranged properties (`derives`, `satisfy`, `refine`, `trace`) and
