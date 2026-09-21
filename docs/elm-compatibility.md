@@ -1360,6 +1360,40 @@ Two rules follow:
 If a link write returns `AQXCM5012E`, check the payload's prefixes **first**. It is cheap, and it is
 the likeliest cause.
 
+### 43. `update_resource` PUTs Turtle, and ETM answers 415 — so MCP cannot write links to ETM
+
+Found 2026-09-21 by asking whether the AAKI premise actually holds: can an agent create the dataset's
+links through MCP tools alone? For ETM, **no** — and this had never been tested, because every link
+in the reference dataset was written by a hand-rolled script.
+
+`oslc-service/src/mcp/tool-handlers.ts` reads a resource, parses it into an rdflib store, and writes
+it back with:
+
+```js
+const updatedTurtle = rdflib.serialize(null, store, args.uri, 'text/turtle') ?? '';
+```
+
+ETM rejects that for `com.ibm.rqm.planning.VersionedTestCase`:
+
+| `Content-Type` on PUT, same valid body | Result |
+|---|---|
+| `application/rdf+xml` | **200** |
+| `text/turtle` | **415 Unsupported Media Type** |
+
+So `etm_update_resource` fails on every write, links included. This is **our** defect, not ELM's, and
+it contradicts advice already in this document (§ "many do not support Turtle at all") which was
+applied to `Accept` on reads but never to `Content-Type` on writes.
+
+**The fix** is to negotiate the write representation rather than assume one: RDF/XML is the OSLC
+Core 2.0 baseline that every provider must support, Turtle is optional. Either default to RDF/XML, or
+use the existing `check_turtle_support` probe to choose. Note the charset parameter is fine —
+`application/rdf+xml; charset=utf-8` is accepted; only the media type matters.
+
+**Why it matters beyond one tool.** Link creation is the whole point of a lifecycle integration, and
+it is the one operation the MCP path had never been shown to perform against ELM. Creation of
+requirements, test cases and work items all work through MCP; updates do not. Until this is fixed,
+"an agent can build the dataset through MCP" is true for resources and false for links.
+
 ### Recipe: creating a typed, documented, correctly-parented element
 
 **One commit.** `POST /api/projects/{p}/commits?branchId={b}` with three `DataVersion` entries, none
