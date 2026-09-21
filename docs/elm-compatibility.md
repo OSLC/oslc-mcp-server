@@ -1243,54 +1243,38 @@ than unwound, and expect the web UI to be the cleanup tool of last resort.
 
 ---
 
-### 39. ETM resolves `validatesArchitectureElement` targets, and reports the failure as the resource's
+### 39. ETM → RSE architecture links: what was wrong, and what was not
 
-> **Superseded in part by quirk 41.** The diagnosis below — that a missing friend or project-area
-> association was to blame — is **wrong**, and is kept because the elimination is what led to the
-> real cause. The friend exists in both directions and the association exists; RSE refuses ELM's
-> fetch because of its `Accept` header. Read quirk 41 for the cause; read this for what was ruled out.
+`rqm:validatesArchitectureElement` writes returned `400 AQXCM5012E The resource could not be retrieved
+or created.` for every target. **The cause was a client-side namespace-prefix bug — quirk 42.** This
+entry records what was investigated and cleared, because the message points away from the payload and
+the same wrong turns are easy to repeat.
 
-Every other cross-server link in this dataset writes without any consumer or friend configuration:
-RSE → DOORS Next (`jazz_am:satisfy`, `jazz_am:trace`), ETM → DOORS Next
-(`oslc_qm:validatesRequirement`), EWM → everything. Friends exist for **selection dialogs**, not for
-storing a triple — that is the usual rule, and it is right almost everywhere.
+Ruled out by measurement, none of them the cause:
 
-`rqm:validatesArchitectureElement` is the exception. ETM resolves the target before storing it, and
-answers a target it cannot reach with:
-
-```
-HTTP/1.1 400
-<oslc:message>AQXCM5012E The resource could not be retrieved or created.</oslc:message>
-```
-
-Measured on one ETM test case, four writes, same resource and same ETag:
-
-| predicate | target | result |
+| Suspected | Test | Result |
 |---|---|---|
-| `oslc_qm:validatesRequirement` | DOORS Next requirement | **200** |
-| `oslc_qm:validatesRequirement` | RSE AM resource | **200** — the range is *not* checked |
-| `rqm:validatesArchitectureElement` | RSE AM resource | **400** `AQXCM5012E` |
-| `rqm:validatesArchitectureElement` | DOORS Next requirement | **400** `AQXCM5012E` |
+| Wrong predicate | in the `VersionedTestCase` creation shape, `readOnly=false`, range `oslc_am:Resource` | fine |
+| ETM rejects RSE URIs | `oslc_qm:validatesRequirement` → RSE URI | 200 |
+| Missing friend | `/qm/friends` lists RSE; RSE lists JTS, DNG, QM, CCM, CDCM, GC | present both ways |
+| Missing configuration context | global configuration, RSE stream, `?oslc_config.context` | 400 / 412 / 400 |
+| Shape changes with associations | re-fetched, byte-identical | no |
+| RSE holds the inverse | `oslc_qm:validatedBy` PUT on a throwaway element | 500, not persisted |
+| Content negotiation | quirk 41 — real, but not this | not the cause |
 
-Three things this rules out, so nobody repeats them:
+**A friend is not needed to store a link**, confirming the general rule; the earlier claim here that
+one was missing came from grepping `/jts/rootservices`, which does not list friends at all. Use
+`/<app>/friends`.
 
-- **Not the wrong predicate.** `http://jazz.net/ns/qm/rqm#validatesArchitectureElement` is in the
-  `VersionedTestCase` *creation* shape with `oslc:readOnly false` and range `oslc:am#Resource`.
-- **Not the RDF.** The identical splice with a different predicate returns 200.
-- **Not the target server's authentication.** The same bearer token reads the RSE resource fine; it
-  is ETM's own server-side resolution that fails, and ETM authenticates as itself, not as the caller.
+**One thing genuinely was missing and was added**: the project-area association. RSE's `Provides –
+Architecture Elements` to the ETM project area appears on the ETM side as link-type
+`validates-architecture-elements`. Whether it is *required* for the write is **untested** — every
+attempt made before it existed also carried the broken prefix, so the two were never separated. It is
+required for ETM's Architecture Element Links panel regardless, so it should be configured either way.
 
-~~The cause is that the ETM project area has no AM service provider at all.~~ **Wrong.** That was
-inferred from a grep of `/jts/rootservices`, which does not list friends — the wrong test. `/qm/friends`
-does, and it lists RSE. The project-area association was genuinely absent and has since been added
-(it appears on the ETM side as link-type `validates-architecture-elements`); adding it changed
-nothing. See quirk 41.
-
-**There is no way around it from the other side.** RSE's AM shape — creation and resource both —
-offers only `rm:Requirement`-ranged properties (`derives`, `satisfy`, `refine`, `trace`) and
-`am:Resource`-ranged ones (`tracksArchitectureElement`, `realizesArchitectureElement`,
-`allocatesArchitectureElement`). Nothing is ranged on QM, so the test-case edge cannot be stored as
-its inverse on the model element. Until the friend exists, that edge has no writable direction.
+Worth knowing: **ETM's project-area links API accepts any `link-type` string**, including invented
+ones, returning 201. Six were probed this way and all were accepted and had no effect. They are
+deletable with `DELETE` on the `jp:url` the listing gives.
 
 ### 40. A second subject appears once a link exists, and appending to it loses the link
 
@@ -1313,12 +1297,9 @@ The failure only appears on the **second** run against a resource, because the f
 creates the reification. A script that looks idempotent on a fresh resource can silently erase its
 own work the next time it runs.
 
-### 41. RSE rejects `Accept: */*` with a 500, which is why ELM cannot link to it
+### 41. RSE rejects `Accept: */*`, and a request with no `Accept`, with a 500
 
-**This is the root cause of quirk 39**, and it is not authentication, associations or friends.
-
-RSE's OSLC AM endpoints validate the `Accept` header against a literal allow-list of concrete media
-types. A wildcard, a type-level wildcard, or no `Accept` header at all is refused:
+RSE's OSLC AM endpoints validate `Accept` against a literal allow-list of concrete media types:
 
 ```
 GET /api/oslc_am/{project}/resource/{id}
@@ -1328,46 +1309,56 @@ Accept: */*
       "description":"Input validation error: \"accept\" does not match any of the allowed types"}
 ```
 
-Measured against one element:
-
 | `Accept` | Result |
 |---|---|
-| `application/rdf+xml` | 200 |
-| `application/xml` | 200 |
-| `text/turtle` | 200 |
-| `application/x-oslc-compact+xml` | 200 |
+| `application/rdf+xml`, `application/xml`, `text/turtle`, `application/x-oslc-compact+xml` | 200 |
 | `application/rdf+xml, */*;q=0.1` | 200 — a concrete type first is enough |
-| `*/*` | **500** |
-| `*/*;q=0.8` | **500** |
-| `application/*` | **500** |
-| *(no `Accept` header)* | **500** |
+| `*/*` · `*/*;q=0.8` · `application/*` · *(no `Accept` header)* | **500** |
 
 RFC 9110 §12.5.1 says `*/*` means any media type is acceptable, and that a request without `Accept`
-is to be treated the same way. RSE treats both as invalid input.
+is treated the same way. RSE treats both as invalid input. `/api/rootservices` is **exempt** and
+answers 200 to `*/*`, so discovery succeeds and the problem only appears deeper in.
 
-`*/*` is what most HTTP client libraries send by default, and it is what ELM's server-side fetch
-sends. So:
+The association's `jp:consumerRegistry` endpoint is stricter still — it demands exactly
+`Accept: application/xml` and 500s on `application/rdf+xml`.
 
-- **ETM cannot create `rqm:validatesArchitectureElement` links.** ETM resolves the target, its fetch
-  carries `*/*`, RSE answers 500, and ETM reports the failure as
-  `400 AQXCM5012E The resource could not be retrieved or created.` The message points at the resource,
-  not at content negotiation, which is what makes this so hard to find.
-- **ETM's "Architecture Element Links" panel fails to initialise** with
-  `Error 400: trs-filter-light.smartfacts.com` — the UI hits the same wall, which is how this was
-  finally cornered.
-- **The RSE configuration pickers in CDCM/GCM do not work**, almost certainly the same cause.
+**This is a real defect worth reporting, but be careful what you blame on it.** It is *not* why ETM
+could not create architecture links — that was a client-side namespace bug, quirk 42. `*/*` is what
+most HTTP libraries send by default, so it will bite something eventually; it had not yet been shown
+to bite anything specific. Our own scripts never hit it because RDF forces a concrete `Accept`.
 
-**`rootservices` is exempt** — it answers 200 to `*/*`. That is precisely why the problem is so
-confusing: discovery succeeds, the friend verifies, the association can be created, and everything
-looks configured. The failure only appears when something fetches actual AM content.
+### 42. A tag whose prefix was never declared returns `400 AQXCM5012E`, which names the resource
 
-**Why our own scripts never hit it:** `fetch()` sends no `Accept` by default, but every script here
-sets one explicitly — `application/rdf+xml` or `text/turtle` — because RDF requires it. Writing
-correct OSLC client code hid a server bug from us.
+ETM serves a test case with both link namespaces already bound, **under its own prefixes**:
 
-**Workaround: none from the client side.** The offending request is made by ELM's server, not by
-anything we control. It is a defect for IBM, and a one-line fix: accept `*/*`, type wildcards, and a
-missing `Accept` header, defaulting to the provider's preferred representation.
+```xml
+<rdf:RDF xmlns:oslc_qm="http://open-services.net/ns/qm#"
+         xmlns:rqm_qm="http://jazz.net/ns/qm/rqm#" …>
+```
+
+So the natural guard — "declare the namespace if the document does not already contain it" — finds
+the URI present, skips the declaration, and emits `<rqm:validatesArchitectureElement/>` with a prefix
+that was never bound. That is not valid XML, and ETM reports it as:
+
+```
+400  AQXCM5012E The resource could not be retrieved or created.
+```
+
+An error about **the resource**, for a mistake about **a namespace prefix**. It cost a long
+investigation: friends, project-area associations, configuration contexts and content negotiation
+were all examined and cleared before the payload itself was suspected, because the message pointed
+firmly away from it.
+
+Two rules follow:
+
+- **Declare the prefix each tag uses, not the namespace URI it maps to.** Test for `xmlns:rqm_qm=`,
+  not for `http://jazz.net/ns/qm/rqm#`.
+- **Prefer the server's own prefixes.** `oslc_qm:validatesRequirement` worked from the start purely
+  because that prefix matched what ETM already declared — which is also why one predicate succeeded
+  and the other failed, the detail that made the fault look server-side.
+
+If a link write returns `AQXCM5012E`, check the payload's prefixes **first**. It is cheap, and it is
+the likeliest cause.
 
 ### Recipe: creating a typed, documented, correctly-parented element
 
