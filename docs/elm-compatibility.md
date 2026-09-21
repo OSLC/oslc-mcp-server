@@ -1243,6 +1243,72 @@ than unwound, and expect the web UI to be the cleanup tool of last resort.
 
 ---
 
+### 39. ETM resolves `validatesArchitectureElement` targets, so linking to RSE needs a friend
+
+Every other cross-server link in this dataset writes without any consumer or friend configuration:
+RSE → DOORS Next (`jazz_am:satisfy`, `jazz_am:trace`), ETM → DOORS Next
+(`oslc_qm:validatesRequirement`), EWM → everything. Friends exist for **selection dialogs**, not for
+storing a triple — that is the usual rule, and it is right almost everywhere.
+
+`rqm:validatesArchitectureElement` is the exception. ETM resolves the target before storing it, and
+answers a target it cannot reach with:
+
+```
+HTTP/1.1 400
+<oslc:message>AQXCM5012E The resource could not be retrieved or created.</oslc:message>
+```
+
+Measured on one ETM test case, four writes, same resource and same ETag:
+
+| predicate | target | result |
+|---|---|---|
+| `oslc_qm:validatesRequirement` | DOORS Next requirement | **200** |
+| `oslc_qm:validatesRequirement` | RSE AM resource | **200** — the range is *not* checked |
+| `rqm:validatesArchitectureElement` | RSE AM resource | **400** `AQXCM5012E` |
+| `rqm:validatesArchitectureElement` | DOORS Next requirement | **400** `AQXCM5012E` |
+
+Three things this rules out, so nobody repeats them:
+
+- **Not the wrong predicate.** `http://jazz.net/ns/qm/rqm#validatesArchitectureElement` is in the
+  `VersionedTestCase` *creation* shape with `oslc:readOnly false` and range `oslc:am#Resource`.
+- **Not the RDF.** The identical splice with a different predicate returns 200.
+- **Not the target server's authentication.** The same bearer token reads the RSE resource fine; it
+  is ETM's own server-side resolution that fails, and ETM authenticates as itself, not as the caller.
+
+The cause is that the ETM project area has **no AM service provider at all** — no friend on the ELM
+JTS points at the RSE host. Confirm with the project area's associations and with a grep of
+`/jts/rootservices`. The fix is a friend registration plus a project-area association; RSE advertises
+everything that needs (`jfs:oauthRequestTokenUrl`, `jfs:oauthAccessTokenUrl`,
+`jfs:oauthUserAuthorizationUrl`, `jfs:oauthRequestConsumerKeyUrl`, and `oslc_am:amServiceProviders`)
+in `/api/rootservices`.
+
+**There is no way around it from the other side.** RSE's AM shape — creation and resource both —
+offers only `rm:Requirement`-ranged properties (`derives`, `satisfy`, `refine`, `trace`) and
+`am:Resource`-ranged ones (`tracksArchitectureElement`, `realizesArchitectureElement`,
+`allocatesArchitectureElement`). Nothing is ranged on QM, so the test-case edge cannot be stored as
+its inverse on the model element. Until the friend exists, that edge has no writable direction.
+
+### 40. A second subject appears once a link exists, and appending to it loses the link
+
+ETM serves a linked resource as **two** `rdf:Description` blocks: the resource itself, and a reified
+`rdf:Statement` carrying the link's label. Code that adds a triple before the *last*
+`</rdf:Description>` therefore attaches it to the reification. The `PUT` returns **200** and the link
+is simply not there on the next read — no error, no warning, and any link previously removed in the
+same edit stays removed.
+
+Locate the subject by its `rdf:about` and insert before *that* block's close:
+
+```js
+const q = uri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const start = xml.search(new RegExp(`<rdf:Description[^>]*rdf:about="${q}"`));
+const end   = xml.indexOf('</rdf:Description>', start);
+const body  = xml.slice(0, end) + triples + xml.slice(end);
+```
+
+The failure only appears on the **second** run against a resource, because the first run is what
+creates the reification. A script that looks idempotent on a fresh resource can silently erase its
+own work the next time it runs.
+
 ### Recipe: creating a typed, documented, correctly-parented element
 
 **One commit.** `POST /api/projects/{p}/commits?branchId={b}` with three `DataVersion` entries, none
