@@ -2,7 +2,7 @@
 
 Findings from running `oslc-mcp-server` against an **IBM ELM 7.1 SR1** deployment — DOORS Next (`/rm`), ETM (`/qm`) and EWM (`/ccm`) — in August 2026, and against **Rhapsody Systems Engineering** (`restapi 1.88.3-release18.4`) in September 2026, the latter through a staging run that created 22 model elements with documentation and a three-level containment hierarchy.
 
-Quirks 1–22 cover DOORS Next, ETM and EWM. **RSE is a different shape of server** and has [its own section](#rhapsody-systems-engineering-rse) with quirks 23–38 — it presents two APIs over one model, authenticates with a pre-issued token, and hides its element-creation semantics behind two validation errors that both point the wrong way.
+Quirks 1–22 cover DOORS Next, ETM and EWM. **RSE is a different shape of server** and has [its own section](#rhapsody-systems-engineering-rse) with quirks 23–47 — it presents two APIs over one model, authenticates with a pre-issued token, and hides its element-creation semantics behind two validation errors that both point the wrong way. Quirks 48–49 cover **CDCM** and the cross-application `Configuration-Context`, measured in September 2026 against a deployment whose project areas *are* configuration-enabled — which the August measurements had no example of.
 
 Most of what follows is not specific to this MCP server. It is how ELM behaves as an OSLC provider, and several of the quirks below cost real time to diagnose because **they fail silently rather than with an error**. Published in the hope it saves someone else that time.
 
@@ -74,7 +74,9 @@ EWM          /ccm/oslc/contexts/<id>/workitems/services.xml
 - `/rm/configurationQuery` rejects an `oslc.where` on `dcterms:title` with `400`, with no indication which part was unsupported.
 - `/gc/oslc/configurations` is `404` on a deployment whose `/gc` application is otherwise up.
 
-Resolving a stream or baseline URI to use as a `Configuration-Context` was not achieved by API alone; the component picker in the web UI remains the practical route.
+Resolving a stream or baseline URI to use as a `Configuration-Context` was not achieved by API alone on that deployment; the component picker in the web UI remained the practical route.
+
+> **Partly superseded (September 2026).** Against a **CDCM** configuration server the URIs *are* reachable by API, once you send discovery to the right place — see [quirk 48](#48-the-cdcm-configuration-area-serviceprovider-is-not-the-area-uri). The ELM `/gc` observations above still stand as written.
 
 ### 6. Query capability is advertised, but its actual behaviour is not
 
@@ -1590,6 +1592,116 @@ means `GET`, add the link, `PUT` back, sending **only** shape properties (quirk 
 
 ---
 
+## CDCM and the cross-application configuration context
+
+Measured September 2026 against a **CDCM** configuration server — an OSLC configuration-management
+server playing the role ELM's GCM plays, aggregating contributions from DOORS Next, ETM, EWM SCM and
+RSE into one global configuration. Unlike the deployment quirks 1–22 were measured on, **the project
+areas here are configuration-enabled**, so the question quirk 5 and the *Still unknown* list left
+open is finally answerable.
+
+### 48. The CDCM configuration area ServiceProvider is not the area URI
+
+A configuration server is discovered like any other: `rootservices` advertises a catalog, the catalog
+lists service providers, and each provider's services are what list and create configurations. The
+trap is in the second step.
+
+`.../cdcm/{space}/oslc_config/catalog` lists one entry per configuration area, and every entry ends
+in **`/service-provider`**:
+
+```
+https://{host}/cdcm/{space}/oslc/areas/{areaId}/service-provider     <- the ServiceProvider
+https://{host}/cdcm/{space}/oslc/areas/{areaId}                      <- the area's DETAILS resource
+```
+
+Both URIs resolve, both return the area's `dcterms:title`, and the bare one is what the web UI puts
+in an address bar — so it is the one that gets copied into a configuration file. It is the wrong one:
+the ServiceProvider points at it with `oslc:details`, not the other way round.
+
+**Scoping discovery to the bare URI fails silently and misleadingly.** Discovery succeeds, reports
+`1/1 providers` with the correct title, and finds **zero creation factories and zero query
+capabilities** — after which `list_configurations` reports:
+
+```
+advertises a configuration catalog (.../oslc_config/catalog)
+but no service providers were discovered for it
+```
+
+which reads as *this CDCM has no configurations*, or *this server is broken*, when the only thing
+wrong is a missing path segment. This is quirk 6's failure mode — a stale or wrong service-provider
+URI presenting as an absent capability — in a place where the URI looks right.
+
+**And the suffixed URI is not sufficient either, for a client that does not expand blank nodes.**
+The ServiceProvider's `oslc:service` is a **blank node**; `oslc-mcp-server` reports it as a bare node
+label (`_g_L11C544`) and does not walk into it, so factories and query capabilities still read as
+none. Fixing the URI is necessary, not sufficient — treat a report of zero capabilities on a
+ServiceProvider whose `oslc:service` is a blank node as *unmeasured*, not as zero.
+
+**What works meanwhile: dereference the LDP containers directly.** Every configuration resource is
+reachable by `get_resource` with no query capability involved.
+
+```
+area          .../oslc/areas/{areaId}
+  component   .../areas/{areaId}/components/{componentId}          oslc_config:Component
+    configurations  .../components/{componentId}/configurations    ldp:BasicContainer -> ldp:contains
+      configuration .../configuration/{configId}                   oslc_config:Configuration, :Stream
+        contribution  .../configuration/{configId}/contributions/{id}
+        baselines     .../configuration/{configId}/baselines       ldp:BasicContainer
+```
+
+Two things worth knowing about that walk:
+
+- **`.../areas/{areaId}/components` is `404`.** There is no components collection at the obvious
+  path; reach a component through the configuration you already hold, or through the UI once.
+- **A contribution is a resource, not a URI.** Each `oslc_config:contribution` dereferences to a
+  `Contribution` carrying `oslc_config:configuration` (the contributed stream), a `dcterms:title` and
+  a `contributionOrder`. **Do not report a global configuration's contents without dereferencing
+  them** — the titles are assigned by whoever added the contribution and one of the four observed
+  here had its own URI as its title, so the list is not self-describing.
+
+One unexplained observation, recorded rather than interpreted: the configuration above is typed both
+`oslc_config:Configuration` and `oslc_config:Stream`, and carries `mutable "0"`. A stream that
+reports itself immutable is not obviously consistent; it did not obstruct anything measured here, and
+no attempt was made to write to it.
+
+### 49. Without a `Configuration-Context` the server picks one, and says nothing
+
+**This answers the question quirk 5 and the *Still unknown* list left open**, which could not be
+measured in August because no project area on that deployment was configuration-enabled.
+
+A request to a configuration-enabled project area with **no `Configuration-Context` header does not
+fail**. It is answered normally, resolved against a configuration the server chooses, and nothing in
+the response says which one. That is the worse of the two possibilities, because a query that is
+answering about the wrong stream is indistinguishable from one that is answering about the right one.
+
+The measurement was an A/B: the same queries run twice, once with the context set to the global
+configuration on every server at once, once with it cleared.
+
+| Query | With context | Cleared | |
+|---|---|---|---|
+| DOORS Next requirements | 52 | 52 | **same URIs** |
+| RSE AM resources | 93 | 93 | **same URIs** |
+
+On this deployment the defaults resolved to exactly the configurations the global configuration
+contributes. **That is a measurement, not a rule, and it is not the reassurance it looks like.** Each
+contributing component happened to hold exactly one stream, so there was nothing else for the server
+to choose. A second stream in any of them and the same context-less request would answer about a
+different configuration, still with no error and no indication. **Send the context.** The cost is one
+call, and it removes the confound rather than leaving it undetected.
+
+**Compare member sets, not counts.** Two different configurations of the same project routinely hold
+the same *number* of resources — that is what a branch is. A count-only comparison would have
+reported "identical" for two populations that shared not one URI. The check is only worth running if
+it compares identity.
+
+**Not everything in a global configuration is versioned, and the unversioned parts are unaffected
+either way.** Of the four contributions observed, the EWM one was an **SCM stream**, not a work-item
+configuration — EWM work items are not configuration-managed, so a work-item query answers the same
+with or without a context. Reading a stable work-item count as evidence that the context is working
+proves nothing.
+
+---
+
 ## Still unknown
 
 ### RSE
@@ -1609,7 +1721,7 @@ means `GET`, add the link, `PUT` back, sending **only** shape properties (quirk 
 - **DOORS Next generates far fewer create tools than it has creation factories** — 12 factories yielded 2 shapes and 2 tools in testing. Undiagnosed. Most DNG types consequently have no `create_*` tool.
 - ~~**Whether create, update and delete actually work.**~~ — **answered: yes, on all three applications.** See quirk 17. The first attempt failed on all but EWM, for reasons that were entirely administrative (licences, a delete permission) and entirely invisible to discovery.
 - ~~**Whether the query results in quirk 6 survive a clean test**~~ — **answered.** The deployment has no configuration-enabled project areas, so that confound never existed; declaring `oslc.prefix` accounted for the DOORS Next results on its own. See the correction in quirk 6.
-- **Configuration-context behavior** — whether a request against a configuration-enabled project area fails without a `Configuration-Context`, or silently resolves against a default. The second would be worse. **Not testable on this deployment yet:** no project area is configuration-enabled. Check it before bulk-creating content in one that is, not after.
+- ~~**Configuration-context behavior**~~ — **answered: it silently resolves against a default**, which is the worse of the two. Measured on a configuration-enabled deployment in September 2026; see quirk 49. What remains open is narrower and still worth knowing: **which** configuration a server picks when a contributing component holds more than one stream. Every component measured held exactly one, so the choice was never exercised.
 - ~~**Whether creation factories enforce their advertised shapes**~~ — **answered: yes, and more strictly than the shape reads.** EWM enforces exactly what its shape declares required (`title`, `filedAgainst`), and additionally rejects one of that property's own advertised allowed values (`Unassigned`). See quirk 12. Which properties are genuinely *writable* remains open.
 
 ---
