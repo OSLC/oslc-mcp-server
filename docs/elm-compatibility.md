@@ -1360,7 +1360,7 @@ Two rules follow:
 If a link write returns `AQXCM5012E`, check the payload's prefixes **first**. It is cheap, and it is
 the likeliest cause.
 
-### 43. `update_resource` PUTs Turtle, and ETM answers 415 — so MCP cannot write links to ETM
+### 43. `update_resource` PUTs Turtle, and ETM answers 415 — fixed
 
 Found 2026-09-21 by asking whether the AAKI premise actually holds: can an agent create the dataset's
 links through MCP tools alone? For ETM, **no** — and this had never been tested, because every link
@@ -1389,10 +1389,93 @@ Core 2.0 baseline that every provider must support, Turtle is optional. Either d
 use the existing `check_turtle_support` probe to choose. Note the charset parameter is fine —
 `application/rdf+xml; charset=utf-8` is accepted; only the media type matters.
 
-**Why it matters beyond one tool.** Link creation is the whole point of a lifecycle integration, and
-it is the one operation the MCP path had never been shown to perform against ELM. Creation of
-requirements, test cases and work items all work through MCP; updates do not. Until this is fixed,
-"an agent can build the dataset through MCP" is true for resources and false for links.
+**Why it mattered beyond one tool.** Link creation is the whole point of a lifecycle integration, and
+it was the one operation the MCP path had never been shown to perform against ELM.
+
+**Fixed 2026-09-21**, together with quirks 44 and 47. All 74 of the reference dataset's Task 8 links
+— 10 `validatesRequirement` and 20 `validatesArchitectureElement` on ETM, 24 `satisfy` and 20 `trace`
+on RSE — were then re-created through `etm_update_resource` and `rse_update_resource` alone, 30
+resources, zero failures, verified by independent read-back. No ELM property was lost, and no SysML
+content either: all 8 RSE elements kept their owned relationships and all 22 Documentation bodies
+survived.
+
+### 44. RSE serves RDF/XML shapes as `application/xml`
+
+RSE's OSLC resource shapes are RDF/XML, but the response says `application/xml`:
+
+| Request | `Content-Type` returned |
+|---|---|
+| `GET .../shape/creation`, `Accept: application/rdf+xml` | `application/xml` |
+| `GET .../shape/resource`, `Accept: application/rdf+xml` | `application/xml` |
+| `GET .../resource/{id}`, `Accept: application/rdf+xml` | `application/rdf+xml` |
+
+`application/xml` is not *illegal* for an XML payload, but OSLC Core requires RDF/XML representations
+to be labelled `application/rdf+xml`, and answering a request that negotiated `application/rdf+xml`
+with a different type is a content-negotiation defect. Resources get it right; shapes do not.
+
+A client that dispatches on the media type therefore sends these to an XML DOM parser instead of an
+RDF parser, and ends up with **no shape properties at all** — which shows up far away from the cause,
+as a server that contributes no typed tools. The robust reading is to sniff the root element: if it
+is `<rdf:RDF>`, parse as RDF/XML whatever the header claims.
+
+### 45. RSE's PUT behaves like PATCH, and that is what makes linking safe
+
+An RSE element's OSLC representation is a **projection** of the SysML element: title, short title,
+type, owning element and the link properties. The SysML side — documentation, features, memberships,
+typings — has no OSLC representation at all.
+
+HTTP and OSLC both define PUT as *replace the resource*. Taken literally here, a read-modify-write to
+add one link would discard everything the projection does not carry. It does not:
+
+```
+link-rse.mjs PUT a body carrying only title, shortTitle, type, owner and links
+to CMP-BAC, whose SysML element has 12 owned relationships.
+After: 12 owned relationships, name, short name and type unchanged.
+22 of 22 Documentation elements still carry their body.
+```
+
+So RSE merges: PUT applies the properties present and leaves the rest of the element alone. **That is
+a deviation** — merge is PATCH semantics — and it is the deviation that makes OSLC linking against
+RSE workable at all. Do not "fix" a client to send a complete representation expecting replace
+semantics, and do not assume another provider behaves this way.
+
+### 46. RSE marks `jazz_am:type` read-only, then rejects a PUT that omits it
+
+From RSE's own `shape/resource`:
+
+| Property | `oslc:readOnly` |
+|---|---|
+| `rdf:type`, `oslc:instanceShape`, `oslc:serviceProvider`, `dcterms:identifier`, `dcterms:modified`, `jazz_am:owningRelatedElementId`, **`jazz_am:type`** | `true` |
+| `dcterms:title`, `oslc:shortTitle`, and every link property | `false` |
+
+OSLC Core says read-only properties are provider-assigned, so a well-behaved client drops them before
+writing. Do that here and RSE answers:
+
+```
+500  error updating OSLC Architecture Management resource -
+     Invalid request content: Missing OSLC Architecture Management resource
+```
+
+because it requires `jazz_am:type` in the body to recognise the payload as an AM resource. **A
+spec-correct client cannot update an RSE element.** The shape and the server contradict each other,
+and the client has to send back a property the shape told it not to.
+
+Practical consequence: do not filter read-only properties out of a generic read-modify-write. It is
+the more correct behaviour and it breaks this provider.
+
+### 47. Serialize link payloads with no base URI, or rdflib relativises them away
+
+Not an ELM quirk — a client-side trap that looks like one. `rdflib.serialize(target, store, base, …)`
+relativises every URI against `base`, so passing the resource's own URI produces:
+
+```xml
+<oslc_am:Resource rdf:about="">
+  <oslc:instanceShape rdf:resource="../shape/resource"/>
+```
+
+RSE rejects that with the same `Missing OSLC Architecture Management resource` as above, and a link
+target that relativised away would be silently wrong rather than refused. Pass no base so every URI
+stays absolute. A link payload is exactly the case where relative URIs are never what you want.
 
 ### Recipe: creating a typed, documented, correctly-parented element
 

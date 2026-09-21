@@ -40,7 +40,7 @@ import { checkTurtleSupport, formatTurtleCheck, type HttpGetter } from './repres
 import { buildPrefixDeclaration, undeclarablePrefixes } from './oslc-prefixes.js';
 import { membersFromStore, totalCountFromStore } from './oslc-members.js';
 
-const { serialize: rdfSerialize } = rdflib;
+const { serialize: rdfSerialize, parse: rdfParse, graph: rdfGraph } = rdflib;
 
 /**
  * HTTP-based MCP context adapter that wraps OSLCClient for the generic handlers.
@@ -80,7 +80,8 @@ class HttpToolContext {
   async getResource(uri: string): Promise<{ turtle: string; etag: string }> {
     const resource = await this.client.getResource(uri, '2.0', ACCEPT_RDF);
     let turtle = '';
-    rdfSerialize(null, resource.store, uri, 'text/turtle', (err, content) => {
+    // No base URI: keep every URI absolute (see handleUpdateResource).
+    rdfSerialize(null, resource.store, undefined as unknown as string, 'text/turtle', (err, content) => {
       if (!err && content) turtle = content;
     });
     const etag = resource.etag ?? '';
@@ -99,9 +100,32 @@ class HttpToolContext {
   }
 
   async updateResource(uri: string, turtle: string, etag: string): Promise<void> {
-    await (this.client as any).client.put(uri, turtle, {
+    // PUT RDF/XML, not Turtle. RDF/XML is the OSLC Core 2.0 baseline every
+    // provider must support; Turtle is optional, and ELM largely does not take
+    // it on writes -- ETM answers `415 Unsupported Media Type` for a
+    // VersionedTestCase, where the identical body as RDF/XML returns 200. The
+    // handler works in Turtle because rdflib does; the wire format is this
+    // layer's decision, so the conversion belongs here.
+    const store = rdfGraph();
+    rdfParse(turtle, store, uri, 'text/turtle');
+    let rdfxml = '';
+    rdfSerialize(null, store, undefined as unknown as string, 'application/rdf+xml', (err, content) => {
+      if (!err && content) rdfxml = content;
+    });
+    if (!rdfxml) throw new Error(`Could not serialize the update to RDF/XML for ${uri}.`);
+
+    // OSLC_MCP_DEBUG_PUT=<dir> writes each PUT body out. Diagnosing a rejected
+    // write means seeing the bytes; reconstructing them by reasoning is how an
+    // afternoon disappears.
+    if (process.env.OSLC_MCP_DEBUG_PUT) {
+      const { writeFileSync } = await import('node:fs');
+      const name = `${Date.now()}-${uri.split('/').pop()}.rdf`;
+      writeFileSync(`${process.env.OSLC_MCP_DEBUG_PUT}/${name}`, rdfxml);
+    }
+
+    await (this.client as any).client.put(uri, rdfxml, {
       headers: {
-        'Content-Type': 'text/turtle',
+        'Content-Type': 'application/rdf+xml',
         'OSLC-Core-Version': '2.0',
         'If-Match': etag,
       },
