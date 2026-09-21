@@ -1415,8 +1415,24 @@ with a different type is a content-negotiation defect. Resources get it right; s
 
 A client that dispatches on the media type therefore sends these to an XML DOM parser instead of an
 RDF parser, and ends up with **no shape properties at all** — which shows up far away from the cause,
-as a server that contributes no typed tools. The robust reading is to sniff the root element: if it
-is `<rdf:RDF>`, parse as RDF/XML whatever the header claims.
+as a server that contributes no typed tools.
+
+**Do not fix this by sniffing the body.** Sniffing overrides the server's declaration for every
+caller, including one that genuinely wants XML and would be handed a graph instead; and no root-element
+test is reliable enough to be worth that. Content negotiation already carries the answer: use what
+*this call* asked for.
+
+`application/xml` is a supertype of `application/rdf+xml`, so a caller that negotiated RDF and got the
+supertype meant RDF; a caller that asked for `application/xml` gets XML, unchanged. If the RDF parse
+then yields no triples, fall back to the XML reading rather than return an empty graph that looks like
+a resource with no properties. Measured against RSE:
+
+| `Accept` sent | `Content-Type` back | Result |
+|---|---|---|
+| `application/rdf+xml` | `application/xml` | RDF graph, 226 triples |
+| `application/xml` | `application/xml` | XML document |
+
+and a genuine Jazz process document (`/qm/process/project-areas/…`, not RDF) still reads as XML.
 
 ### 45. RSE's PUT behaves like PATCH, and that is what makes linking safe
 
