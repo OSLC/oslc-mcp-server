@@ -1722,6 +1722,17 @@ the same *number* of resources — that is what a branch is. A count-only compar
 reported "identical" for two populations that shared not one URI. The check is only worth running if
 it compares identity.
 
+**To tell "honours the context" from "ignores the context", send a bad one.** The A/B above cannot
+distinguish them: a server that resolves the context correctly and a server that discards it both
+return the same bytes while one configuration exists. The discriminating test is a **negative
+control** — set the context to a syntactically valid configuration URI that does not exist, then read
+a resource you know is there. A server that honours the context answers `404`; one that ignores it
+serves the resource as if nothing had changed. Measured on RSE (September 2026): a fabricated
+`…/oslc_config/{project}/baseline/{bogus-uuid}` turned a known-good AM resource into
+`404 … OSLC Architecture Management resource not found`, and restoring the real context brought it
+back. **RSE honours it.** The test costs two requests, needs no write, and is the only way to settle
+the question before the configurations diverge.
+
 **Not everything in a global configuration is versioned, and the unversioned parts are unaffected
 either way.** Of the four contributions observed, the EWM one was an **SCM stream**, not a work-item
 configuration — EWM work items are not configuration-managed, so a work-item query answers the same
