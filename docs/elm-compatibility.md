@@ -1659,10 +1659,38 @@ Two things worth knowing about that walk:
   them** — the titles are assigned by whoever added the contribution and one of the four observed
   here had its own URI as its title, so the list is not self-describing.
 
-One unexplained observation, recorded rather than interpreted: the configuration above is typed both
-`oslc_config:Configuration` and `oslc_config:Stream`, and carries `mutable "0"`. A stream that
-reports itself immutable is not obviously consistent; it did not obstruct anything measured here, and
-no attempt was made to write to it.
+**`mutable` carries no information here — do not read it.** An earlier revision of this section
+flagged it as an oddity that a resource typed `oslc_config:Stream` reports `mutable "0"`. Measured
+again once a baseline existed: **the baseline reports `mutable "0"` as well.** The same value on a
+stream and on a baseline of that stream distinguishes nothing, so use `rdf:type` —
+`oslc_config:Stream` against `oslc_config:Baseline` — and not this property.
+
+**The web UI's URL is not the OSLC URI, but the ids are the same.** A configuration copied from the
+browser looks like
+
+```
+.../cdcm/spa/spaces/{space}/area/{areaId}/component/{componentId}/config/{configId}
+.../cdcm/{space}/oslc/areas/{areaId}/components/{componentId}/configuration/{configId}   <- OSLC
+```
+
+Same three ids, different path shape. Record the OSLC form; translate the other when someone hands it
+to you.
+
+**Verify a global baseline by dereferencing its contributions, not by its type.** A CDCM baseline is
+created by delegation — GCM asks each contributor to baseline its own configuration — and a baseline
+whose contributions still point at *streams* has pinned nothing while looking entirely correct. On a
+successful commit each `oslc_config:contribution` resolves to a contributor **baseline**, and three of
+the four applications say so explicitly: DOORS Next and RSE carry `oslc_config:baselineOfStream`, ETM
+carries `prov:wasDerivedFrom`, each naming the exact stream that was contributed to the parent.
+
+Two traps in that check. **ETM addresses streams and baselines under the same path segment**
+(`…/oslc_config/resources/com.ibm.team.vvc.Configuration/{id}`), so the URI alone does not tell you
+which one you have — dereference it. And **EWM SCM gives you nothing to check against**: its baseline
+carries neither `baselineOfStream` nor `wasDerivedFrom`, the contributed stream's `baselines`
+container comes back empty, and the stream and the baseline name *different* `oslc_config:Component`
+resources — `…/scm/comp/s/{streamId}` titled "… Stream" versus `…/scm/comp/c/{componentId}` titled
+"… Default Component". Whether that is two facades on one component or a genuine mismatch was not
+resolved. Treat an EWM SCM contribution as **unverified rather than wrong**, and say so.
 
 ### 49. Without a `Configuration-Context` the server picks one, and says nothing
 
