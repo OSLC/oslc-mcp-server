@@ -1520,23 +1520,35 @@ link predicates without one. **That was wrong** — the shape declares all seven
 | `title`, `shortTitle` | `XMLLiteral` |
 | `owningRelatedElementId` | `string` |
 
-**The leading candidate is a name mismatch between the shape and the instances.** The shape declares
-**`satisfies`** and **`refines`**; the instances carry **`satisfy`** and `refine`. A client matches a
-link's predicate against the shape's `oslc:propertyDefinition`, so a shape that declares
-`…#satisfies` cannot classify an instance triple on `…#satisfy` — it finds no property, and a
-predicate with no shape entry is not a navigable link. `trace` is spelled the same in both, so on this
-hypothesis `trace` should classify correctly while `satisfy` does not; if a client shows **no**
-outgoing links at all, the namespaces differ too and the mismatch is broader than the local names.
+**`satisfies` and `refines` above are `oslc:name` values, not predicate URIs.** An earlier revision of
+this quirk read them as a shape/instance mismatch against the instances' `satisfy` and `refine`. That
+was a second wrong inference, and it repeats quirk 18's lesson: **match on `oslc:propertyDefinition`,
+never on a name or title.** `oslc:name` is a label and is free to differ from the predicate's local
+name.
 
-> **Unconfirmed, and here is exactly what would confirm it.** The shape's `oslc:propertyDefinition`
-> URIs have not been read. They live in blank nodes that the client used here does not expand (quirk
-> 48), and **RSE answers `500` to `Accept: text/turtle` on the shape** —
-> `"Input validation error: \"accept\" does not match any of the allowed types"` — so it cannot be
-> retrieved as Turtle either; shapes come back as RDF/XML typed `application/xml` (quirk 44).
-> To settle it, `GET …/oslc_am/{project}/shape/resource` with `Accept: application/rdf+xml` and
-> compare each `oslc:propertyDefinition` against the predicate URIs on an actual element.
+**Two facts argue the predicates do match.** `jazz_am:satisfy` and `jazz_am:refine` are the forms the
+OSLC AM vocabulary and IBM's [DM link types vocabulary][dmlt] define — deliberately singular, carried
+forward from Rational Design Manager through Rhapsody Model Manager — so they are what a client should
+write and what RSE should declare. And RSE **silently discards anything outside its shape** (quirk 26),
+yet links written as `linktypes#satisfy` persisted and are queryable, which they could not do if the
+shape did not accept that predicate.
 
-**If the mismatch is confirmed**, the server-side fix is to declare the predicates under the URIs the
+**So the cause is not established.** What is known: the instance triples are resource-valued, the
+shape declares the link predicates as `oslc:Resource`, and a client that finds no shape entry for a
+predicate — or no shape at all — classifies it as a plain value rather than a link. Two cheap checks
+separate the remaining possibilities:
+
+1. **Does the client's shape fetch succeed?** A client that swallows a failed shape fetch into an
+   empty shape demotes *every* predicate, which looks identical to a per-predicate mismatch. If the
+   element reports **no** outgoing links at all rather than losing `satisfy` while keeping `trace`,
+   suspect this first — and note RSE is strict about `Accept` (quirk 41, and it answers `500` to
+   `text/turtle` on a shape).
+2. **What are the shape's `oslc:propertyDefinition` URIs?** `GET …/shape/resource` with
+   `Accept: application/rdf+xml`, then compare each against the predicate URIs on a real element.
+
+[dmlt]: https://jazz.net/wiki/pub/LinkedData/DmLinkTypesVocabulary/dmlinktypes.ttl
+
+**If a mismatch is confirmed**, the server-side fix is to declare the predicates under the URIs the
 instances actually use. A client-side workaround is to fall back to the RDF term type when a link's
 predicate has no shape entry — a `NamedNode` then reads as a link — but that is strictly a fallback:
 it cannot distinguish an enumeration or a `dcterms:contributor` reference from a real link, which is
