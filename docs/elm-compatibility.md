@@ -1495,54 +1495,53 @@ RSE rejects that with the same `Missing OSLC Architecture Management resource` a
 target that relativised away would be silently wrong rather than refused. Pass no base so every URI
 stays absolute. A link payload is exactly the case where relative URIs are never what you want.
 
-### 50. RSE's link predicates carry no `oslc:valueType`, so clients render them as text
+### 50. RSE's link predicates do not render as links in an OSLC client
 
-**Symptom.** Open an RSE element in an OSLC client and its `satisfy`, `trace` and the other
-`linktypes#` predicates appear as **plain text property values** rather than navigable links, and the
-element reports **no outgoing links** — even though the links are there and resolve.
+**Symptom.** Open an RSE element in an OSLC client and its `satisfy` and `trace` values appear as
+**plain text property values** rather than navigable links, and the element reports **no outgoing
+links** — though the links exist and resolve.
 
-**The instance data is not the problem.** The objects are URI nodes, not literals. Two independent
-confirmations: a parsed read returns them as resource references, and — decisively — a query filtering
-on the link property *matches*:
+**The instance data is not the problem.** The objects are URI nodes, not literals, confirmed two ways:
+a parsed read returns them as resource references, and a query filtering on the link property
+*matches* — a URI-valued filter cannot match a literal.
 
 ```
 GET  …/oslc_am/{project}/resource?oslc.where=jazz_am:satisfy=<…/rm/resources/TX_rM8_8…>
      ->  CMP-SF          (and a requirement nothing satisfies -> totalCount 0)
 ```
 
-A URI-valued filter cannot match a literal, so the server holds and indexes these as references.
+**Nor is a missing `oslc:valueType`.** An earlier revision of this quirk said the shape declared the
+link predicates without one. **That was wrong** — the shape declares all seven as
+`oslc:valueType oslc:Resource`, which a client reading the shape reports as:
 
-**The shape is where it goes wrong.** The AM resource shape declares the seven `linktypes#` predicates
-(quirk 26) but **without `oslc:valueType`**. A client that decides link-versus-value from the shape
-has nothing to key off and falls back to treating the value as text.
+| Shape property | Declared type |
+|---|---|
+| `derives`, `satisfies`, `refines`, `trace`, `tracksArchitectureElement`, `realizesArchitectureElement`, `allocatesArchitectureElement` | **`Resource`** |
+| `title`, `shortTitle` | `XMLLiteral` |
+| `owningRelatedElementId` | `string` |
 
-**And keying off the shape is the correct client behaviour, not a shortcut.** An `rdf:resource` object
-is *not* automatically a navigable link — enumeration values, `dcterms:contributor`, access-control
-and project-area references are all URI-valued, and promoting every one of them to a link produces a
-graph mostly made of nodes nobody wants to open. Distinguishing them is precisely what OSLC Core's
-`oslc:valueType` and `oslc:representation` are for. Resource Navigator, for instance, keeps a link
-only when the shape gives the predicate a `valueType` of `oslc:Resource`, `oslc:AnyResource` or
-`oslc:LocalResource` *and* the property is not an enumeration.
+**The leading candidate is a name mismatch between the shape and the instances.** The shape declares
+**`satisfies`** and **`refines`**; the instances carry **`satisfy`** and `refine`. A client matches a
+link's predicate against the shape's `oslc:propertyDefinition`, so a shape that declares
+`…#satisfies` cannot classify an instance triple on `…#satisfy` — it finds no property, and a
+predicate with no shape entry is not a navigable link. `trace` is spelled the same in both, so on this
+hypothesis `trace` should classify correctly while `satisfy` does not; if a client shows **no**
+outgoing links at all, the namespaces differ too and the mismatch is broader than the local names.
 
-**The server-side fix** is to declare, on each of the seven predicates:
+> **Unconfirmed, and here is exactly what would confirm it.** The shape's `oslc:propertyDefinition`
+> URIs have not been read. They live in blank nodes that the client used here does not expand (quirk
+> 48), and **RSE answers `500` to `Accept: text/turtle` on the shape** —
+> `"Input validation error: \"accept\" does not match any of the allowed types"` — so it cannot be
+> retrieved as Turtle either; shapes come back as RDF/XML typed `application/xml` (quirk 44).
+> To settle it, `GET …/oslc_am/{project}/shape/resource` with `Accept: application/rdf+xml` and
+> compare each `oslc:propertyDefinition` against the predicate URIs on an actual element.
 
-```
-oslc:valueType      oslc:Resource ;
-oslc:representation oslc:Reference ;
-oslc:range          oslc:Any ;          # or the specific target type
-```
-
-**The client-side workaround**, where the shape cannot be changed, is to fall back to the RDF term
-type when the shape declares a predicate but omits `valueType` — a `NamedNode` object then reads as a
-link. It is a fallback and not a replacement: it cannot tell an enumeration from a reference, which is
-the distinction the shape exists to carry.
-
-> **Measured 2026-09-23**; the shape's own property blocks were **not** read directly, because they are
-> blank nodes that the client used here does not expand (the limitation in quirk 48). The conclusion is
-> inferred from three facts that together leave little room: the predicates are in the shape, the
-> client demotes exactly when `valueType` is absent, and the client demoted them. To confirm it in one
-> step, fetch `…/oslc_am/{project}/shape/resource` with `Accept: application/rdf+xml` and read the
-> `oslc:property` block for `satisfy`.
+**If the mismatch is confirmed**, the server-side fix is to declare the predicates under the URIs the
+instances actually use. A client-side workaround is to fall back to the RDF term type when a link's
+predicate has no shape entry — a `NamedNode` then reads as a link — but that is strictly a fallback:
+it cannot distinguish an enumeration or a `dcterms:contributor` reference from a real link, which is
+the distinction `oslc:valueType` exists to carry and the reason keying off the shape is right in the
+first place.
 
 ### Recipe: creating a typed, documented, correctly-parented element
 
