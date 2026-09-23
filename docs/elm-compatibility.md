@@ -2,7 +2,7 @@
 
 Findings from running `oslc-mcp-server` against an **IBM ELM 7.1 SR1** deployment — DOORS Next (`/rm`), ETM (`/qm`) and EWM (`/ccm`) — in August 2026, and against **Rhapsody Systems Engineering** (`restapi 1.88.3-release18.4`) in September 2026, the latter through a staging run that created 22 model elements with documentation and a three-level containment hierarchy.
 
-Quirks 1–22 cover DOORS Next, ETM and EWM. **RSE is a different shape of server** and has [its own section](#rhapsody-systems-engineering-rse) with quirks 23–47 — it presents two APIs over one model, authenticates with a pre-issued token, and hides its element-creation semantics behind two validation errors that both point the wrong way. Quirks 48–49 cover **CDCM** and the cross-application `Configuration-Context`, measured in September 2026 against a deployment whose project areas *are* configuration-enabled — which the August measurements had no example of.
+Quirks 1–22 cover DOORS Next, ETM and EWM. **RSE is a different shape of server** and has [its own section](#rhapsody-systems-engineering-rse) with quirks 23–47 and 50 — it presents two APIs over one model, authenticates with a pre-issued token, and hides its element-creation semantics behind two validation errors that both point the wrong way. Quirks 48–49 cover **CDCM** and the cross-application `Configuration-Context`, measured in September 2026 against a deployment whose project areas *are* configuration-enabled — which the August measurements had no example of.
 
 Most of what follows is not specific to this MCP server. It is how ELM behaves as an OSLC provider, and several of the quirks below cost real time to diagnose because **they fail silently rather than with an error**. Published in the hope it saves someone else that time.
 
@@ -1494,6 +1494,55 @@ relativises every URI against `base`, so passing the resource's own URI produces
 RSE rejects that with the same `Missing OSLC Architecture Management resource` as above, and a link
 target that relativised away would be silently wrong rather than refused. Pass no base so every URI
 stays absolute. A link payload is exactly the case where relative URIs are never what you want.
+
+### 50. RSE's link predicates carry no `oslc:valueType`, so clients render them as text
+
+**Symptom.** Open an RSE element in an OSLC client and its `satisfy`, `trace` and the other
+`linktypes#` predicates appear as **plain text property values** rather than navigable links, and the
+element reports **no outgoing links** — even though the links are there and resolve.
+
+**The instance data is not the problem.** The objects are URI nodes, not literals. Two independent
+confirmations: a parsed read returns them as resource references, and — decisively — a query filtering
+on the link property *matches*:
+
+```
+GET  …/oslc_am/{project}/resource?oslc.where=jazz_am:satisfy=<…/rm/resources/TX_rM8_8…>
+     ->  CMP-SF          (and a requirement nothing satisfies -> totalCount 0)
+```
+
+A URI-valued filter cannot match a literal, so the server holds and indexes these as references.
+
+**The shape is where it goes wrong.** The AM resource shape declares the seven `linktypes#` predicates
+(quirk 26) but **without `oslc:valueType`**. A client that decides link-versus-value from the shape
+has nothing to key off and falls back to treating the value as text.
+
+**And keying off the shape is the correct client behaviour, not a shortcut.** An `rdf:resource` object
+is *not* automatically a navigable link — enumeration values, `dcterms:contributor`, access-control
+and project-area references are all URI-valued, and promoting every one of them to a link produces a
+graph mostly made of nodes nobody wants to open. Distinguishing them is precisely what OSLC Core's
+`oslc:valueType` and `oslc:representation` are for. Resource Navigator, for instance, keeps a link
+only when the shape gives the predicate a `valueType` of `oslc:Resource`, `oslc:AnyResource` or
+`oslc:LocalResource` *and* the property is not an enumeration.
+
+**The server-side fix** is to declare, on each of the seven predicates:
+
+```
+oslc:valueType      oslc:Resource ;
+oslc:representation oslc:Reference ;
+oslc:range          oslc:Any ;          # or the specific target type
+```
+
+**The client-side workaround**, where the shape cannot be changed, is to fall back to the RDF term
+type when the shape declares a predicate but omits `valueType` — a `NamedNode` object then reads as a
+link. It is a fallback and not a replacement: it cannot tell an enumeration from a reference, which is
+the distinction the shape exists to carry.
+
+> **Measured 2026-09-23**; the shape's own property blocks were **not** read directly, because they are
+> blank nodes that the client used here does not expand (the limitation in quirk 48). The conclusion is
+> inferred from three facts that together leave little room: the predicates are in the shape, the
+> client demotes exactly when `valueType` is absent, and the client demoted them. To confirm it in one
+> step, fetch `…/oslc_am/{project}/shape/resource` with `Accept: application/rdf+xml` and read the
+> `oslc:property` block for `satisfy`.
 
 ### Recipe: creating a typed, documented, correctly-parented element
 
