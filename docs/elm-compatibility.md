@@ -1791,6 +1791,49 @@ proves nothing.
 
 ---
 
+### 52. A CDCM stream created from a baseline contributes baselines, so nothing can be written
+
+**Creating a stream from a global baseline produces a `Stream` whose every contribution is still a
+`Baseline`** — the same contribution URIs the baseline itself carries, unchanged. Measured
+2026-09-23 on a four-contributor global configuration (DOORS Next, ETM, EWM SCM, Rhapsody): the new
+configuration is typed `oslc_config:Configuration, oslc_config:Stream` and `prov:wasDerivedFrom` the
+baseline correctly, and all four `oslc_config:contribution` values are byte-identical to the
+baseline's.
+
+**Which makes it a mutable configuration with immutable contents.** OSLC Configuration Management
+distinguishes the two precisely: a `Stream` accepts change, a `Baseline` does not. A stream every one
+of whose contributions is a baseline cannot accept a change to any contributed resource, so it cannot
+do the one thing its type promises. **The expected behaviour is to branch recursively** — create a
+stream from each contributed baseline and contribute those — which is what the operation means when a
+global configuration aggregates several providers.
+
+**Two separate gaps, and the second is the one that blocks a workaround.**
+
+1. **No recursive branching.** CDCM does not create the contributor streams; they must be made by
+   hand in each application.
+2. **The contributions cannot then be repointed.** The new stream's contributions report as closed
+   baselines and the UI will not change them to a stream — so doing (1) by hand does not help,
+   because the result cannot be attached.
+
+**Workaround: build the run configuration bottom-up instead of branching top-down.**
+
+1. In each contributing application, create a stream from *its* component baseline — a DOORS Next
+   stream from the RM baseline, an ETM stream from the QM baseline, a Rhapsody branch from the tag.
+2. In CDCM, create a **new** global configuration rather than deriving one from the baseline, and add
+   those component streams as its contributions.
+
+The global configuration is an aggregation; nothing requires it to be *derived from* the baseline for
+its contents to start there. `prov:wasDerivedFrom` is provenance, not mechanism. Adding contributions
+to a freshly created stream is known to work — it is how the original configuration was assembled.
+
+> **Do not branch the global stream instead.** A stream cut from the *mainline* contributes the
+> mainline's own component streams rather than copies, so writes through it land in the mainline. That
+> looks like isolation and is not.
+
+**What actually needs a per-run stream is narrower than the contributor list suggests.** Only the
+versioned stores holding content the run modifies need one — here DOORS Next, ETM and Rhapsody. EWM
+work items are unversioned, and a contributed SCM baseline is harmless where no SCM content exists.
+
 ## Incoming links: ELM asks an index, not the provider
 
 ### 51. ELM resolves incoming links through a Jazz REST API, not through OSLC query
