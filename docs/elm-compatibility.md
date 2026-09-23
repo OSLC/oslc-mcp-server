@@ -1791,6 +1791,55 @@ proves nothing.
 
 ---
 
+## Incoming links: ELM asks an index, not the provider
+
+### 51. ELM resolves incoming links through a Jazz REST API, not through OSLC query
+
+**An AM provider can implement OSLC query perfectly and still show no incoming links in ELM**, because
+ELM does not ask the provider. From **ELM 7.1.0 onward** it posts to an `/incoming-links` REST API
+served by **both LQE and LDX** (servlet mapping exactly `/incoming-links`), and reads the answer from
+the index rather than from the resource's owner.
+
+Measured against 7.1.0 SR1 while building a client for it:
+
+- `GET /lqe/incoming-links` → **500** from the servlet (it wants a POST body)
+- `GET /lqe/incoming-links/default` → **routing 404**; the servlet mapping carries no dataset segment,
+  so the API documentation's own `curl` examples showing `/incoming-links/default` contradict its
+  Implementation Reference
+- a real answer comes back as a proper error when it can: LQE will say *"Configuration `<uri>` does not
+  exist in the index or is not a configuration"*, which is worth surfacing rather than swallowing
+
+**The OSLC answer to the same question is a different endpoint.** The OSLC-OP **Link Discovery
+Management** specification defines `POST /discover-links`, served by the **provider that owns the
+links**, taking an `oslc_ldm:LinkDiscoveryRequest` and honouring `Configuration-Context`. It needs no
+index and no crawl, because the owner already knows what it stores.
+
+| | Jazz `/incoming-links` | OSLC LDM `/discover-links` |
+|---|---|---|
+| Served by | LQE, LDX — an **index** | the **provider** owning the links |
+| Needs a TRS feed crawled first | yes | no |
+| Implemented by ELM | yes, 7.1.0+ | not as far as has been observed |
+| Implemented by `generic-framework` | no | yes, on owned-domain deployments |
+
+**So the two sides are complementary and currently do not meet.** A genOSLC server answers
+`/discover-links` and cannot be indexed by LQE (it publishes no TRS); ELM asks `/incoming-links` and
+does not ask providers. A client wanting both must speak both — `oslc-client`'s `LDMClient` tries each
+in turn, ordered by a hint in the configured base URL, and remembers which answered.
+
+> **A 404 on `/incoming-links` against a genOSLC server is expected and harmless.** A base URL that
+> does not look like an OSLC LDM server is probed for the Jazz API first, 404s, and falls through to
+> `/discover-links`. The probe happens once per base URL and the winner is cached, so it costs one
+> wasted request rather than a broken feature — do not read it as a defect.
+
+**Not being changed in `generic-framework`.** Implementing the Jazz API would mean adopting an
+undocumented-by-specification interface in order to be consumed by one product; the specification-track
+endpoint already exists and works. The gap that actually matters for a genOSLC server appearing in
+ELM's link index is the **TRS feed** (quirk 49's neighbours, and design dependency 7), not this.
+
+> **Source note.** The Jazz API details above are from measurements taken while implementing a client
+> against 7.1.0 SR1, not from IBM's *Incoming Links API* document — which was not readable when this was
+> written. Treat the endpoint behaviour as measured and the intent as inferred.
+
 ## Still unknown
 
 ### RSE
