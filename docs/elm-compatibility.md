@@ -1495,65 +1495,55 @@ RSE rejects that with the same `Missing OSLC Architecture Management resource` a
 target that relativised away would be silently wrong rather than refused. Pass no base so every URI
 stays absolute. A link payload is exactly the case where relative URIs are never what you want.
 
-### 50. RSE's link predicates do not render as links in an OSLC client
+### 50. `application/xml` on an RDF shape breaks a client that trusts the label
 
-**Symptom.** Open an RSE element in an OSLC client and its `satisfy` and `trace` values appear as
-**plain text property values** rather than navigable links, and the element reports **no outgoing
-links** — though the links exist and resolve.
+**Symptom.** An RSE element's `satisfy` and `trace` values render as **plain text** in an OSLC client
+rather than as navigable links, and the element reports **no outgoing links**. No shape request appears
+in the network log, and no error is visible on the resource.
 
-**The instance data is not the problem.** The objects are URI nodes, not literals, confirmed two ways:
-a parsed read returns them as resource references, and a query filtering on the link property
-*matches* — a URI-valued filter cannot match a literal.
+**Root cause, measured.** RSE serves its OSLC resource shape as RDF/XML **labelled
+`application/xml`** (quirk 44). A client that branches on the declared content type, and treats
+`application/xml` as plain XML, never parses it as RDF. In `oslc-client` 4.2.0 that branch also called
+the browser `DOMParser` with a single argument:
 
+```js
+if (contentType.includes('text/xml') || contentType.includes('application/xml')) {
+    return { etag, xml: new DOMParser().parseFromString(response.data) };   // media type omitted
+}
 ```
-GET  …/oslc_am/{project}/resource?oslc.where=jazz_am:satisfy=<…/rm/resources/TX_rM8_8…>
-     ->  CMP-SF          (and a requirement nothing satisfies -> totalCount 0)
-```
 
-**Nor is a missing `oslc:valueType`.** An earlier revision of this quirk said the shape declared the
-link predicates without one. **That was wrong** — the shape declares all seven as
-`oslc:valueType oslc:Resource`, which a client reading the shape reports as:
+which throws `Failed to execute 'parseFromString' on 'DOMParser': 2 arguments required, but only 1
+present`. Everything visible follows from that one throw:
 
-| Shape property | Declared type |
+| | |
 |---|---|
-| `derives`, `satisfies`, `refines`, `trace`, `tracksArchitectureElement`, `realizesArchitectureElement`, `allocatesArchitectureElement` | **`Resource`** |
-| `title`, `shortTitle` | `XMLLiteral` |
-| `owningRelatedElementId` | `string` |
+| shape fetch throws | the client catches it and returns an **empty** shape document |
+| empty shape | no property matches any predicate, so **every** link is reclassified as a plain value |
+| every link demoted | the element reports *no outgoing links* — not "`satisfy` missing, `trace` fine" |
+| failure cached | the failed observable is memoised, so there is **no retry and no second request** |
 
-**`satisfies` and `refines` above are `oslc:name` values, not predicate URIs.** An earlier revision of
-this quirk read them as a shape/instance mismatch against the instances' `satisfy` and `refine`. That
-was a second wrong inference, and it repeats quirk 18's lesson: **match on `oslc:propertyDefinition`,
-never on a name or title.** `oslc:name` is a label and is free to differ from the predicate's local
-name.
+**The shape itself is fine**, and so are the links. The shape declares all seven `linktypes#`
+predicates with `oslc:valueType oslc:Resource`; the instance triples are resource-valued;
+`jazz_am:satisfy` and `jazz_am:refine` are the singular forms the OSLC AM and IBM [DM link types][dmlt]
+vocabularies define, carried forward from Rational Design Manager. **Two earlier revisions of this
+quirk blamed the server** — first a missing `oslc:valueType`, then a `satisfies`/`satisfy` mismatch read
+off `oslc:name`. Both were wrong, and rule 3 of the operating guidance says why: *when your client and
+the server disagree, suspect your client first.*
 
-**Two facts argue the predicates do match.** `jazz_am:satisfy` and `jazz_am:refine` are the forms the
-OSLC AM vocabulary and IBM's [DM link types vocabulary][dmlt] define — deliberately singular, carried
-forward from Rational Design Manager through Rhapsody Model Manager — so they are what a client should
-write and what RSE should declare. And RSE **silently discards anything outside its shape** (quirk 26),
-yet links written as `linktypes#satisfy` persisted and are queryable, which they could not do if the
-shape did not accept that predicate.
+**Fix:** `oslc-client` **4.2.1** (`6ccb56b`) resolves `application/xml` by what the call negotiated
+rather than by sniffing the body — a caller that asked for RDF and got the supertype gets a graph, a
+caller that asked for XML still gets XML — and passes the media type in both `parseFromString` calls.
 
-**So the cause is not established.** What is known: the instance triples are resource-valued, the
-shape declares the link predicates as `oslc:Resource`, and a client that finds no shape entry for a
-predicate — or no shape at all — classifies it as a plain value rather than a link. Two cheap checks
-separate the remaining possibilities:
+**Two things worth taking from it beyond the upgrade.**
 
-1. **Does the client's shape fetch succeed?** A client that swallows a failed shape fetch into an
-   empty shape demotes *every* predicate, which looks identical to a per-predicate mismatch. If the
-   element reports **no** outgoing links at all rather than losing `satisfy` while keeping `trace`,
-   suspect this first — and note RSE is strict about `Accept` (quirk 41, and it answers `500` to
-   `text/turtle` on a shape).
-2. **What are the shape's `oslc:propertyDefinition` URIs?** `GET …/shape/resource` with
-   `Accept: application/rdf+xml`, then compare each against the predicate URIs on a real element.
+- **A client that swallows a shape-fetch failure into an empty shape produces a silent, total loss of
+  link navigation.** An empty shape is indistinguishable from a shape that declares nothing navigable.
+  Log it loudly, and prefer failing the classification over defaulting it.
+- **Do not memoise a failure with no retry.** Caching the recovered value hides both the error and the
+  request, which is why this presented as *no network activity at all* — the hardest thing to debug is
+  the request that never happens.
 
 [dmlt]: https://jazz.net/wiki/pub/LinkedData/DmLinkTypesVocabulary/dmlinktypes.ttl
-
-**If a mismatch is confirmed**, the server-side fix is to declare the predicates under the URIs the
-instances actually use. A client-side workaround is to fall back to the RDF term type when a link's
-predicate has no shape entry — a `NamedNode` then reads as a link — but that is strictly a fallback:
-it cannot distinguish an enumeration or a `dcterms:contributor` reference from a real link, which is
-the distinction `oslc:valueType` exists to carry and the reason keying off the shape is right in the
-first place.
 
 ### Recipe: creating a typed, documented, correctly-parented element
 
