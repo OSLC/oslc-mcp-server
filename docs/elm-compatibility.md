@@ -1815,20 +1815,23 @@ global configuration aggregates several providers.
    baselines and the UI will not change them to a stream — so doing (1) by hand does not help,
    because the result cannot be attached.
 
-**Workaround: build the run configuration bottom-up instead of branching top-down.**
+**A bottom-up workaround exists and was rejected.** One could create a stream from each component
+baseline by hand, then add those to a *newly created* global configuration rather than one derived
+from the baseline. It works, and it should not be used:
 
-1. In each contributing application, create a stream from *its* component baseline — a DOORS Next
-   stream from the RM baseline, an ETM stream from the QM baseline, a Rhapsody branch from the tag.
-2. In CDCM, create a **new** global configuration rather than deriving one from the baseline, and add
-   those component streams as its contributions.
+- **It discards the derivation.** The run configuration would carry no `prov:wasDerivedFrom` to the
+  release baseline, so nothing in the data says which release the run descends from. For an
+  assessment thread whose whole point is comparing a run against the baseline it came from, that is
+  the relationship you least want to lose.
+- **It reinstates manual configuration management** — assembling contributions by hand, per run, and
+  keeping them consistent by discipline. That is the work a global configuration manager exists to
+  remove, so a demonstration of configuration management held together that way argues against
+  itself.
 
-The global configuration is an aggregation; nothing requires it to be *derived from* the baseline for
-its contents to start there. `prov:wasDerivedFrom` is provenance, not mechanism. Adding contributions
-to a freshly created stream is known to work — it is how the original configuration was assembled.
-
-> **Do not branch the global stream instead.** A stream cut from the *mainline* contributes the
-> mainline's own component streams rather than copies, so writes through it land in the mainline. That
-> looks like isolation and is not.
+**The right resolution is the product fix**, and the defect is worth reporting precisely because the
+workaround is unattractive: branching a global configuration must branch its contributions
+recursively, and until it does, a stream created from a baseline should at least allow its
+contributions to be repointed.
 
 **What actually needs a per-run stream is narrower than the contributor list suggests.** Only the
 versioned stores holding content the run modifies need one — here DOORS Next, ETM and Rhapsody. EWM
