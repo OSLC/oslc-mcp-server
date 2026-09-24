@@ -1947,17 +1947,17 @@ So *"when did element X last change"* is answered by finding the commits whose c
 **Why it matters beyond Rhapsody.** An incremental assessment needs a defensible answer to "what changed between these two configurations". For a config-enabled ELM application that is a `dcterms:modified` comparison; for an AM provider it may be nothing at all over OSLC. The general lesson is that **OSLC's representation is not the whole server** — where a tool has a native API, ask it before concluding a capability is missing. `probe-rse-history.mjs` in the AAKI example reproduces all of this.
 
 
-### 54. Rhapsody SE branch names cannot contain spaces, so they never equal their CDCM contribution title
+### 54. Rhapsody SE branch names cannot contain spaces — which matters less than it looks
 
 **Symptom.** A per-run configuration is created across the estate as `AEB-200 run-1`, and the Rhapsody SE branch comes back as `AEB-200-run-1`. It reads like someone typed it inconsistently.
 
-**It is a constraint.** RSE does not allow spaces in a branch name. The OMG *Systems Modeling API and Services* is modelled on git, and git's `check-ref-format` forbids spaces in ref names — RSE inherits that. The other contributions in a CDCM global configuration are DOORS Next, ETM and EWM configurations, which have no such restriction, so **the RSE branch name will always differ from the title CDCM shows for its contribution** whenever the chosen name contains a space.
+**It is a constraint, not a slip.** RSE does not allow spaces in a branch name. The OMG *Systems Modeling API and Services* is modelled on git, and git's `check-ref-format` forbids spaces in ref names — RSE inherits that. DOORS Next, ETM and EWM configurations have no such restriction, so an RSE branch will differ from the name used elsewhere whenever that name contains a space.
 
-**What to do about it.** Nothing, in the model. But in any script that reconciles a global configuration with its contributions:
+**Why it is nonetheless a non-issue: names are not how configurations are found.** In a global configuration the CDCM stream is the authority. Resolve its `oslc_config:contribution` list and follow each contribution to its `configuration` URI, and every local stream is in hand without a name being compared. The difference is then invisible, because nothing ever looked.
 
-- **Map, never match on equality.** Record the CDCM contribution title *and* the RSE branch name in whatever manifest the run keeps, and resolve RSE by its stream URI rather than by name.
-- **Do not "repair" the difference.** Renaming the CDCM contribution to match the branch propagates a tool-specific restriction into the one place that is meant to be tool-neutral.
-- **Expect the same class of problem elsewhere.** Anything reached through the SysML v2 API inherits git-shaped naming rules; a name that is legal in an ELM application is not automatically legal there.
+The failure this prevents is a script that reconciles a global configuration against its contributions *by title* — it will work across the ELM applications, fail only on the AM provider, and fail in a way that reads like a missing contribution rather than a naming rule. **Resolve by traversal; treat titles as display text.** And do not "repair" the difference by renaming the CDCM contribution to match, which pushes a tool-specific restriction into the one layer meant to be tool-neutral.
+
+**The general form.** Anything reached through the SysML v2 API inherits git-shaped naming rules, so a name that is legal in an ELM application is not automatically legal there.
 
 
 ---
