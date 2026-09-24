@@ -1924,6 +1924,29 @@ ELM's link index is the **TRS feed** (quirk 49's neighbours, and design dependen
 [query30]: https://docs.oasis-open-projects.org/oslc-op/query/v3.0/os/oslc-query.html
 [qm20]: https://archive.open-services.net/bin/view/Main/QmSpecificationV2.html
 
+### 53. Rhapsody SE keeps element change history in commits, not on the element — and three ways to read it wrong
+
+**Symptom.** You need to know when a model element last changed, and nothing on the element says. Over OSLC AM a Rhapsody SE resource carries no `dcterms:modified` and no `dcterms:created` — and, contrary to the reasonable guess, asking the SysML v2 API for JSON does not help: the element payload is `@id`, `@type`, `aliasIds`, `declaredName`, `declaredShortName` and containment. No timestamps on either side.
+
+**Where it actually lives.** The history is in the commits, and it is complete:
+
+| Call | What comes back |
+|---|---|
+| `GET /projects/{p}/commits` | every commit, each with a `created` timestamp and a `previousCommit` chain |
+| `GET /projects/{p}/commits/{c}/changes` | the changeset — one `DataVersion` per changed element |
+| `GET /projects/{p}/commits/{c}/elements` | the full element set as of that commit |
+
+So *"when did element X last change"* is answered by finding the commits whose changeset contains X and taking the latest `created`. Measured on a 38-commit project: 290 change records, and one component attributable to exactly 4 commits. This is a **true version comparison**, and it is stronger than the timestamp heuristic ELM's config-enabled applications allow — it does not over-report on a corrected typo any less, but it is grounded in repository history rather than a clock.
+
+**Three traps, each of which makes a wrong answer look right.**
+
+1. **`?branchId=` is not a supported filter on `GET /commits`, and it returns `500`, not `400`.** It *is* valid on `POST /commits`, where it says which branch to commit to — so the parameter looks established, and the 500 reads like a server fault rather than "that filter does not exist here."
+2. **The default page size is 25, and there is no `Link` header.** A project with 38 commits returns 25 with nothing to indicate truncation. The branch head was among the 13 omitted, so the history looked complete *and* looked like it ended two weeks before it did. Always pass `page[size]` and assert the branch head is present.
+3. **`GET /commits` is not ordered newest-first.** `list[0]` was the initial commit. Take the head from `GET /branches/{b}` → `head.@id`, never from the list's first entry.
+
+**Why it matters beyond Rhapsody.** An incremental assessment needs a defensible answer to "what changed between these two configurations". For a config-enabled ELM application that is a `dcterms:modified` comparison; for an AM provider it may be nothing at all over OSLC. The general lesson is that **OSLC's representation is not the whole server** — where a tool has a native API, ask it before concluding a capability is missing. `probe-rse-history.mjs` in the AAKI example reproduces all of this.
+
+
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
