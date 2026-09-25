@@ -1992,6 +1992,14 @@ enterprise-promotion and code-review link types — `includedInDeployment`, `pro
 `extractedFromWorkItem`. The tool for creating a *defect* is lost over properties that belong to a
 build pipeline.
 
+**And in the end it was one property, not 23.** A create tool excludes read-only properties, so only
+the *writable* over-long names ever reach its schema — and on these shapes that is exactly one:
+`com.ibm.team.build.linktype.reportedWorkItems.com.ibm.team.build.common.link.reportedAgainstBuilds`,
+99 characters. Verified after the fix: it is the only shortened key in either the `task` or the
+`defect` create schema, appearing as
+`edWorkItems.com.ibm.team.build.common.link.reportedAgainstBuilds`. **One property nobody would set
+removed fourteen tools.**
+
 **Diagnosis — tell "not generated" from "generated and dropped".** `describe_discovery` reports what
 the *server* built, before any client sees it. If it lists `ewm_create_task` and your tool palette does
 not, the loss is client-side and no amount of ELM debugging will find it.
