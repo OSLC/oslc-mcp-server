@@ -1960,6 +1960,56 @@ The failure this prevents is a script that reconciles a global configuration aga
 **The general form.** Anything reached through the SysML v2 API inherits git-shaped naming rules, so a name that is legal in an ELM application is not automatically legal there.
 
 
+### 55. EWM property names are long enough to delete a whole MCP tool
+
+**Symptom.** Every `ewm_create_*` tool is missing from an AI client — all 14 of them, for a project
+area whose creation factories are all present and working. It reads as "EWM cannot create work items
+over OSLC", and it is nothing of the kind.
+
+**Cause.** EWM advertises Jazz **link-type ids** as `oslc:name` values on its work-item shapes, and
+they are long. Measured on the live shapes of one project area:
+
+| Shape | properties | over 64 characters |
+|---|---|---|
+| `task` | 119 | **23** |
+| `defect` | 119 | **23** |
+| `capability` | 139 | **23** |
+
+The longest runs to **143 characters**:
+
+```
+com.ibm.team.filesystem.reviews.linktype.codereview.extractedWorkItem.
+  com.ibm.team.filesystem.reviews.linktype.codereview.extractedFromWorkItem
+```
+
+A tool generator turns shape property names into JSON Schema property keys. The Anthropic API
+constrains those keys to `/^[a-zA-Z0-9_.-]{1,64}$/` and **rejects the entire tool when one key fails**
+— it does not drop the offending property and keep the rest. So one unusable property name removes a
+whole creation capability.
+
+**The part worth pausing on: none of the 23 is a property anyone would set.** They are build,
+enterprise-promotion and code-review link types — `includedInDeployment`, `promotedChangeSets`,
+`extractedFromWorkItem`. The tool for creating a *defect* is lost over properties that belong to a
+build pipeline.
+
+**Diagnosis — tell "not generated" from "generated and dropped".** `describe_discovery` reports what
+the *server* built, before any client sees it. If it lists `ewm_create_task` and your tool palette does
+not, the loss is client-side and no amount of ELM debugging will find it.
+
+**Fix — shorten from the front, never the back.** These names share long leading segments
+(`com.ibm.team.build.linktype.`, `com.ibm.team.enterprise.promotion.linktype.`) and carry their
+distinguishing content at the end, so a back-truncation collides immediately while keeping the **last**
+64 characters does not: on all three shapes above, every property name stayed unique. Implemented as
+`schemaKey()` in `oslc-service`, with the predicate map registering **both** spellings so a caller
+using the real property name still resolves.
+
+**The general lesson, which is not about EWM.** A shape's property *names* are part of the API surface
+of any tool generated from it. A provider naming a property for its own internal registry — as Jazz
+reasonably does — can make its tools unusable in a client it has never heard of, and the failure
+surfaces as a missing capability rather than as a naming problem. Generators should constrain what
+they emit; they cannot assume a vocabulary is machine-friendly just because it is well-formed.
+
+
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
