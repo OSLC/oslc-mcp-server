@@ -47,7 +47,7 @@ const { serialize: rdfSerialize, parse: rdfParse, graph: rdfGraph } = rdflib;
  * The shared handlers expect an OslcMcpContext, but the standalone server uses
  * OSLCClient directly. This adapter bridges the gap for the generic tool handlers.
  */
-class HttpToolContext {
+export class HttpToolContext {
   readonly serverName: string;
   readonly serverBase: string;
   private client: OSLCClient;
@@ -89,10 +89,34 @@ class HttpToolContext {
   }
 
   async createResource(factoryURI: string, turtle: string): Promise<string> {
-    const response = await (this.client as any).client.post(factoryURI, turtle, {
+    // POST RDF/XML, not Turtle -- the same reason updateResource does, and it
+    // was fixed there first. RDF/XML is the OSLC Core 2.0 baseline every
+    // provider must support; Turtle is optional, and ELM largely does not take
+    // it on writes. DOORS Next rejects a Turtle creation body outright with
+    //   415  CRRRS6402E  Content is not allowed. Content type must be application/rdf+xml
+    // where the identical body as RDF/XML is accepted. The handler works in
+    // Turtle because rdflib does; the wire format is this layer's decision, so
+    // the conversion belongs here.
+    const store = rdfGraph();
+    rdfParse(turtle, store, factoryURI, 'text/turtle');
+    let rdfxml = '';
+    rdfSerialize(null, store, undefined as unknown as string, 'application/rdf+xml', (err, content) => {
+      if (!err && content) rdfxml = content;
+    });
+    if (!rdfxml) throw new Error(`Could not serialize the new resource to RDF/XML for ${factoryURI}.`);
+
+    // Same reasoning as the PUT hook: diagnosing a rejected create means seeing
+    // the bytes that were actually sent.
+    if (process.env.OSLC_MCP_DEBUG_PUT) {
+      const { writeFileSync } = await import('node:fs');
+      const name = `${Date.now()}-create-${factoryURI.split('/').pop()}.rdf`;
+      writeFileSync(`${process.env.OSLC_MCP_DEBUG_PUT}/${name}`, rdfxml);
+    }
+
+    const response = await (this.client as any).client.post(factoryURI, rdfxml, {
       headers: {
-        'Content-Type': 'text/turtle',
-        'Accept': 'text/turtle',
+        'Content-Type': 'application/rdf+xml',
+        'Accept': 'application/rdf+xml',
         'OSLC-Core-Version': '2.0',
       },
     });
