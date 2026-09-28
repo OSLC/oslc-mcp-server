@@ -2108,19 +2108,24 @@ linkType  = http://open-services.net/ns/cm#relatedArchitectureElement
 
 Nothing is missing from the index. The client simply never asked with that `linkType`.
 
-**Why this predicate in particular gets missed.** `relatedArchitectureElement` is declared in the
-**OSLC CM namespace**, even though its range is `oslc_am:Resource` and its target is an architecture
-resource. A client showing an **AM** resource naturally enumerates **AM** link types — `jazz_am:trace`,
-`jazz_am:satisfy` — and a CM-namespace predicate is not among them. The link is invisible from the AM
-side while being perfectly recorded.
+**Where the list of predicates comes from.** Ideally from the shape: Resource Navigator reads
+`oslc:inversePropertyLabel`, a MID extension declaring how to label a link's reverse direction. **ELM
+does not publish it**, so for ELM resources the client falls back to a **hard-coded table** —
+`INVERSE_LINK_TYPES` in `oslc-client`'s `LDMClient.js`, whose keys are exactly the `linkType` values
+sent to LQE.
 
-That asymmetry is noted in the AAKI design's own resolution of the EWM→AM link type: the CM→AM
-predicate lives in CM, while the AM→anything predicates are `jazz_am:*`. It looks like an artifact of
-how the Design Manager link types were carried into OSLC AM, and this is the bill for it.
+`oslc_cm:relatedArchitectureElement` was **not in that table**, so it was never queried. Fixed
+2026-09-28 by adding it, mapped to itself as `oslc:related` is — OSLC declares no inverse term for it,
+and inventing one would be worse than the asymmetry.
 
-**What a client should do.** Enumerate link types across **every** domain whose resources can be link
-*targets*, not just the domain of the resource being displayed. For an AM resource that means the CM
-link types too — at minimum `oslc_cm:relatedArchitectureElement`.
+**The asymmetry behind it** is worth naming, because it is why this entry was easy to forget: the
+CM→AM predicate is declared in the **CM** namespace while every AM→anything predicate is `jazz_am:*`.
+Anyone assembling a table by walking the AM vocabulary will not meet it. The AAKI design noted the
+same oddity when resolving the EWM→AM link type; this is the bill for it.
+
+**Two more predicates carry the same blind spot.** `rm#validatedBy` and `qm#relatedChangeRequest`
+appear in the table only as inverse *values*, never as keys — so nothing queries them either. Recorded
+and guarded by a test rather than changed, since adding keys alters what every client asks LQE for.
 
 **Diagnostic order that works**, since an empty result is indistinguishable from a wrong question:
 call the API by hand with the predicate you expect. If it returns bindings, the index is fine and the
