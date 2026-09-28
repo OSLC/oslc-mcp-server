@@ -2163,6 +2163,40 @@ client's link-type set is the defect. If it returns none, *then* ask whether the
 > design and its absence says nothing about the index.
 
 
+### 58. ETM has no query path to `validatesArchitectureElement` — select drops it, where rejects it
+
+**The question that cannot be asked.** *"Which test cases verify this architecture element?"* ETM
+stores the answer, on the test case, as `oslc_qm:validatesArchitectureElement`. Neither OSLC query
+mechanism will return it:
+
+| Attempt | Result |
+|---|---|
+| `oslc.select=dcterms:title,oslc_qm:validatesArchitectureElement` | **200** — 27 test cases, 27 titles, and the predicate appears **once as a bare string, with zero `rdf:resource` values**. Silently dropped |
+| `oslc.where=oslc_qm:validatesArchitectureElement=<uri>` | **400 `AQXCM5002E The query was not run for this query URL`** |
+| `GET` on one test case | **the values are there** — `IT-4` returns three components |
+
+So the data exists and is reachable **only one resource at a time**. Answering "what verifies this
+component" means fetching every test case in the project area and filtering client-side.
+
+**Why this is worse than it sounds.** The `select` failure is silent. A projection over all test cases
+returns `200` with a full, well-formed result set in which the column is simply absent — which reads
+as *"no test case validates any architecture element"*. That is a confident, wrong answer produced by
+a correct-looking query, and it is the natural first move for anyone doing impact analysis.
+
+It also removes the last fallback. For incoming links there are three mechanisms — LQE
+`/incoming-links`, LDM `/discover-links`, and OSLC query against the storing server. Rhapsody SE
+supports no TRS and no `/discover-links`, so every ELM→RSE link depends on the third. **For this
+predicate the third does not work either.**
+
+**Measured 2026-09-28** on ETM 7.x, project area `Acme AEB-200 (Quality Management)`, with a global
+`Configuration-Context` set. `validatesRequirement` projects correctly on the same query in the same
+call, so this is per-predicate, not a broken query capability.
+
+**What to do.** Fetch the test cases and filter locally; budget for it, since it is one request per
+test case. And treat an empty column in an ETM projection as *unknown* rather than *absent* until a
+single `GET` has confirmed the property really is empty on at least one resource that should carry it.
+
+
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
