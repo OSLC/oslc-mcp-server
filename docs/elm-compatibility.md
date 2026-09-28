@@ -1502,10 +1502,22 @@ The value is a plain string naming the SysML v2 element kind — `"PartUsage"`, 
 "type": [ { "uri": "http://open-services.net/ns/am#Resource" }, "PartUsage" ]
 ```
 
-**The rule this forces on a shape-driven client:** keep a property that the shape marks read-only
-**and** required. A provider declaring both is contradicting itself, and the requirement is the
-operative half. Filtering on `readOnly` alone is the more spec-correct behaviour and it makes this
-provider unusable for writes. `oslc-service` applies this in `shapeToJsonSchema`.
+**A shape-driven client cannot fix this on its own.** The obvious repair — keep a property the shape
+marks read-only **and** required, since a provider declaring both contradicts itself and the
+requirement is the operative half — is correct in general and `oslc-service` now applies it in
+`shapeToJsonSchema`. **It does not unblock RSE.** After that change the generated create tool still
+has no `type` parameter, because `jazz_am:type` never reaches the schema generator: `parseShape`
+drops any property carrying no `oslc:name`, and RSE's creation shape does not surface this one in a
+form the parser can name.
+
+So the property RSE requires is one an OSLC client has no advertised way to send. **Creating an
+element in Rhapsody SE over OSLC AM is not possible**, and no client-side shape handling changes
+that. The routes that remain are an escape hatch for properties a provider requires but does not
+advertise, or the SysML v2 JSON API — see the recipe below, which is how this dataset's elements
+were created in the first place.
+
+*Recorded 2026-09-28 after the read-only repair shipped and the create still failed. The earlier
+revision of this note claimed the repair unblocked creates; it does not.*
 
 Note what is *not* fixed by it: `dcterms:description` is absent from both shapes (quirk 26), so
 created elements carry `dcterms:title` and `oslc:shortTitle` and no prose. An AI assistant reading
