@@ -2305,3 +2305,49 @@ two-hour OIDC lifetime.
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
+
+### 60. RSE creates an element you cannot delete, and neither API can remove it
+
+**Creates and deletes are not symmetric, and the asymmetry follows the owner.** Measured on one
+session, same client, same configuration context:
+
+| Element | Owner | `DELETE` |
+|---|---|---|
+| PartUsage | root Package (owner omitted on create) | **204** |
+| PartDefinition | a Package | **204** |
+| PartUsage | a **PartDefinition** — i.e. a unit under a component | **500**, reproducibly |
+
+So a software unit created under its component over OSLC AM — the normal shape of the thing — cannot
+be removed over OSLC AM.
+
+**The escape routes are all closed.**
+
+- `DELETE` returns 500 every time, with no body beyond the status.
+- **Reparenting is refused.** `jazz_am:owningRelatedElementId` is `oslc:readOnly` (quirk 46) and a PUT
+  carrying it fails with `Invalid request content: Missing OSLC Architecture Management resource` —
+  the same generic message, whether or not `jazz_am:type` is supplied alongside.
+- **The SysML v2 JSON API cannot see it.** `GET /projects/{p}/commits/{c}/elements/{id}` against
+  **every** branch head returns the element as an `UnknownElement` stub. This is quirk 29 — an
+  AM-created element is real but absent from commit-scoped reads until a commit touches it — so a
+  delete commit has nothing to address.
+
+**Note the shape of that last failure.** The API answers **HTTP 200** with a well-formed body whose
+`@type` is `UnknownElement`, `declaredName` is `UnknownElement_<id>`, every list empty, and the truth
+in a `reason` field:
+
+```json
+{ "@id": "d09c750f-…", "@type": "UnknownElement",
+  "declaredName": "UnknownElement_d09c750f-…", "ownedRelationship": [],
+  "reason": "ERROR in getObjectByID = Error: Unable to find element with id = … in configurationId = …" }
+```
+
+A caller checking status codes sees four successes. A caller checking `@type` or `reason` sees four
+not-founds. **Check `reason`, and treat `UnknownElement` as absence.**
+
+**What is left.** `dcterms:title` and `oslc:shortTitle` remain writable, so an element that cannot be
+deleted can at least be renamed to mark it inert. That is a mitigation, not a repair: the element
+still exists, still counts, and still appears under its parent.
+
+**Consequence for teardown.** Any automation that creates model elements as part of a reproducible
+run cannot undo that part of itself. Plan for a disposable branch or project rather than element-level
+cleanup — an environment that can only be built up and not torn down is not reproducible.
