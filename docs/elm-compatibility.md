@@ -1481,6 +1481,37 @@ and the client has to send back a property the shape told it not to.
 Practical consequence: do not filter read-only properties out of a generic read-modify-write. It is
 the more correct behaviour and it breaks this provider.
 
+**The same contradiction blocks `POST`, and that is worse.** `jazz_am:type` is `oslc:readOnly true`
+on `…/shape/creation` as well, where it is also `Exactly-one`. A client that filters read-only
+properties out of a creation body gets:
+
+```
+500  error creating OSLC Architecture Management resource -
+     ElementObject has missing property elementType
+     {"owningRelationship":…,"declaredShortName":"…","declaredName":"…"}
+```
+
+No element is created. **Every create against RSE fails**, not merely creates that omit content — so
+a generated create tool built correctly from the shape can never succeed at all.
+
+The value is a plain string naming the SysML v2 element kind — `"PartUsage"`, `"PartDefinition"`,
+`"Documentation"`, `"InterfaceDefinition"` — and it is visible on any element as a bare literal beside
+`oslc_am:Resource`:
+
+```json
+"type": [ { "uri": "http://open-services.net/ns/am#Resource" }, "PartUsage" ]
+```
+
+**The rule this forces on a shape-driven client:** keep a property that the shape marks read-only
+**and** required. A provider declaring both is contradicting itself, and the requirement is the
+operative half. Filtering on `readOnly` alone is the more spec-correct behaviour and it makes this
+provider unusable for writes. `oslc-service` applies this in `shapeToJsonSchema`.
+
+Note what is *not* fixed by it: `dcterms:description` is absent from both shapes (quirk 26), so
+created elements carry `dcterms:title` and `oslc:shortTitle` and no prose. An AI assistant reading
+the model gets names and links and no description of behaviour — which limits what it can reason
+about, and is the strongest argument for reaching the SysML v2 JSON API for content.
+
 ### 47. Serialize link payloads with no base URI, or rdflib relativises them away
 
 Not an ELM quirk — a client-side trap that looks like one. `rdflib.serialize(target, store, base, …)`
