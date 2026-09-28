@@ -2018,6 +2018,51 @@ surfaces as a missing capability rather than as a naming problem. Generators sho
 they emit; they cannot assume a vocabulary is machine-friendly just because it is well-formed.
 
 
+### 56. A CDCM 500 surfaces as a DOORS Next *authentication* error
+
+**Symptom (2026-09-28).** Resource Navigator can no longer open any DOORS Next or ETM resource. The
+client console shows a `400` from DOORS Next carrying:
+
+```
+java.lang.RuntimeException: com.ibm.team.gc.sdk.service.exception.GcSdkAuthenticationException:
+  An error occurred running the operation "GET …/cdcm/…/components/{c}/contributions
+  ?configurationUri=…/configuration/{id} HTTP/1.1"
+```
+
+It reads as a broken friend/consumer relationship between DOORS Next and CDCM. **It is not.**
+
+**What is actually wrong.** CDCM's component-level `contributions` *collection* endpoint returns
+`500 Internal Server Error`. Measured with a valid user token, so authentication is not involved:
+
+| Path | Result |
+|---|---|
+| `…/components/{c}/configuration/{id}` | **200** |
+| `…/components/{c}/configuration/{id}/contributions/{one}` | **200** |
+| `…/components/{c}/contributions` | **500** |
+| `…/components/{c}/contributions?configurationUri={any}` | **500** — for a stream, another stream, and a baseline alike |
+
+Individual configuration and individual contribution reads are fine, which is why nothing looks broken
+until something asks CDCM to **expand** a global configuration into its contributions — and that is
+precisely what an ELM application does when it receives a `Configuration-Context` naming a global
+configuration.
+
+**Consequences, and how to tell this apart from a real auth fault.**
+
+- Every ELM application fails under a **global** configuration context — DOORS Next `400`, ETM `401`. The two report it differently, and neither mentions `500`.
+- The same resources are **fine under a local configuration**: a DOORS Next stream returns `200`. That contrast is the fastest discriminator — if local works and global does not, suspect the configuration server, not the credential.
+- A genuine credential fault would fail the same way for a *single* contribution read. Here those still return `200`.
+
+**The lesson is the error message.** The Jazz GC SDK wraps any failure of its outbound call in
+`GcSdkAuthenticationException`, so a `500` from the configuration server is reported to the client as
+an authentication problem, at a different status code, by a different server. Three layers of
+misdirection: check what the configuration server itself returns before touching a friend
+relationship. Anonymous access to that endpoint answers `401 WWW-Authenticate: Bearer`, so the
+endpoint is reachable and does enforce auth — it simply also fails with a valid token.
+
+**Reporting it.** CDCM returns a `requestId` in the JSON body of the 500
+(e.g. `49a0c8f6e5ac461f8a24d69820783817`), which is what the server log needs.
+
+
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
