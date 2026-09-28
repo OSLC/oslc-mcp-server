@@ -2197,6 +2197,55 @@ test case. And treat an empty column in an ETM projection as *unknown* rather th
 single `GET` has confirmed the property really is empty on at least one resource that should carry it.
 
 
+### 59. DOORS Next cannot authenticate to Rhapsody SE — an 814-byte access token into a 250-byte field
+
+**Not our bug, and not configurable around.** Diagnosed by Olex Yurov against RSE
+`1.88.3-release18.4` and ELM 7.2.0, reproduced to the stack trace; summarised here because it bounds
+what the AAKI example can demonstrate.
+
+**The fault.** When an ELM application completes the 3-legged OAuth 1.0a dance with RSE, RSE returns
+**the logged-in user's OIDC bearer JWT** as the OAuth access token instead of an opaque one. That
+value is **814 bytes**. The Jazz item `AppCreds` constrains `accessToken` to **250 bytes**, enforced
+in the item model rather than as a column width, so no administrator can widen it:
+
+```
+PropertyConstraintException: Value of attribute "accessToken" is 814 bytes,
+  which is greater than the allowed encoded length of 250 bytes.
+```
+
+The token exchange *succeeds*; the storage of the credential fails. `/rm/oauthCallback` returns 400,
+nothing is persisted, and every later OSLC request to RSE is sent **unsigned** — which is why the
+visible symptom is a 401 three layers downstream of the cause. Retrying is worse: RSE keys its
+accessor by the access token, the JWT is stable for its two-hour life, and the second attempt violates
+a primary key and returns 500.
+
+**What the user sees.** DOORS Next shows *"Some associated project areas with potential links are not
+authenticated"*, names the RSE project area, and clicking it 401s. Nothing indicates a size limit.
+
+**What this costs an integrated estate.**
+
+| Direction | Works? | Why |
+|---|---|---|
+| **RSE → DOORS Next** | **Yes** | RSE is the consumer and stores a short token issued by ELM. Links from the model into requirements are created and resolved normally, under a global configuration |
+| **DOORS Next → RSE** | **No** | The above. No per-user OAuth session can exist, in the UI or through the AJAX proxy |
+| **Via LQE/LDX instead** | **No** | RSE publishes no TRS — `rootservices` declares none, and `/api/trs`, `/api/trs2`, `/trs`, `/api/oslc_am/trs` all 404. No data provider can be created |
+| **2-legged OAuth** | **No** | RSE accepts it (HTTP 200 with `oauth_token=""`), but ELM ships no property to make an application authenticate 2-legged to a friend, and it would authenticate as the system user rather than the end user |
+
+**The consequence worth internalising.** In a deployment with Rhapsody SE, **links into the model are
+one-directional in practice**: they can be created and read from the RSE side and from any client that
+authenticates to RSE directly, but an ELM application cannot see them at all. A client holding its own
+OIDC credentials for both servers — Resource Navigator, or an MCP client — is unaffected, because it
+never uses a Jazz friend relationship. **That makes such a client the only place ELM↔RSE traceability
+is visible**, which is a strange thing to have to say about an ELM estate and is worth stating plainly
+in any demonstration.
+
+**Suggested fix** (from the report): mint an opaque token with RSE's existing `generateKey()` — the
+32-character form its own source documents at `authentication.js:218` — return that as `oauth_token`,
+key the accessor by it, and keep the JWT in a separate field. That also fixes the retry collision,
+since distinct tokens give distinct primary keys, and decouples the OAuth session from the browser's
+two-hour OIDC lifetime.
+
+
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
