@@ -2077,6 +2077,60 @@ an infrastructure one: before a run that depends on global configurations, `GET`
 and it fails loudly instead of halfway through a beat.
 
 
+### 57. LQE's incoming-links API is asked one link type at a time, so a client only finds what it thinks to ask for
+
+**Symptom.** A BMM Objective shows no incoming links, although two EWM change requests point at it.
+The client calls LQE and gets a well-formed empty answer — `{"results":{"bindings":[]}}` — which reads
+as "nothing links here" rather than as "you did not ask the right question".
+
+**The API.** `POST /lqe/incoming-links`, and it is fussy in a way worth writing down once:
+
+| | |
+|---|---|
+| `Content-Type` | **`application/x-www-form-urlencoded`**. JSON is rejected with `CRLQE0410E` |
+| `oslc_config.context` | required — the configuration to resolve in |
+| `targetUrl` | required — the resource you want incoming links *to* |
+| **`linkType`** | **required** — a single predicate URI |
+
+Each parameter is discovered only by omitting it: the error names the next missing one, one at a time.
+
+**`linkType` is the point.** The API does not answer *"what points at this resource?"* It answers
+*"what points at this resource **via this predicate**?"* So a client must decide which predicates to
+ask about, and **it finds only what it enumerates**.
+
+**Measured.** With the right predicate the data is all there:
+
+```
+targetUrl = …/bmm/components/acme-aeb/artifacts/bmm-obj-2
+linkType  = http://open-services.net/ns/cm#relatedArchitectureElement
+  -> 2 bindings: EWM work items 585 and 597
+```
+
+Nothing is missing from the index. The client simply never asked with that `linkType`.
+
+**Why this predicate in particular gets missed.** `relatedArchitectureElement` is declared in the
+**OSLC CM namespace**, even though its range is `oslc_am:Resource` and its target is an architecture
+resource. A client showing an **AM** resource naturally enumerates **AM** link types — `jazz_am:trace`,
+`jazz_am:satisfy` — and a CM-namespace predicate is not among them. The link is invisible from the AM
+side while being perfectly recorded.
+
+That asymmetry is noted in the AAKI design's own resolution of the EWM→AM link type: the CM→AM
+predicate lives in CM, while the AM→anything predicates are `jazz_am:*`. It looks like an artifact of
+how the Design Manager link types were carried into OSLC AM, and this is the bill for it.
+
+**What a client should do.** Enumerate link types across **every** domain whose resources can be link
+*targets*, not just the domain of the resource being displayed. For an AM resource that means the CM
+link types too — at minimum `oslc_cm:relatedArchitectureElement`.
+
+**Diagnostic order that works**, since an empty result is indistinguishable from a wrong question:
+call the API by hand with the predicate you expect. If it returns bindings, the index is fine and the
+client's link-type set is the defect. If it returns none, *then* ask whether the source is indexed.
+
+> **Not the cause, checked first and wasted time:** `/lqe/sparql` answers `503 CRLQE03590E The SPARQL
+> service is not available`. On an **LQE RS** deployment — the relational store — SPARQL is gone by
+> design and its absence says nothing about the index.
+
+
 ---
 
 *Corrections and additions welcome — particularly from anyone who has diagnosed the DOORS Next tool-generation gap, or mapped ELM's configuration-management APIs more successfully.*
