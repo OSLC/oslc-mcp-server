@@ -2351,3 +2351,49 @@ still exists, still counts, and still appears under its parent.
 **Consequence for teardown.** Any automation that creates model elements as part of a reproducible
 run cannot undo that part of itself. Plan for a disposable branch or project rather than element-level
 cleanup — an environment that can only be built up and not torn down is not reproducible.
+
+### 61. RSE has two creation paths, and the API one does not create a model element
+
+The AM service provider advertises **both** a creation factory and a delegated creation dialog:
+
+```xml
+<oslc:creationFactory>  …/api/oslc_am/{p}/resource            <!-- POST, for API clients -->
+<oslc:creationDialog>   …/oslc_am/{p}/resource/dialog/creation <!-- HTML, for a human -->
+<oslc:selectionDialog>  …/oslc_am/{p}/resource/dialog/selection
+```
+
+Note the dialogs are **not** under `/api` — they are the product's own UI, served from the web host.
+
+**They do not do the same thing.** A `POST` to the creation factory returns **201** and produces a
+resource that is real to OSLC — it is returned by `GET`, matched by the query capability, accepted as
+a link target, and reported with the right `jazz_am:type` and owner. It is **not** a SysML v2
+element. It appears in no commit, is invisible to
+`GET /projects/{p}/commits/{c}/elements/{id}` on every branch head, and does not appear in the
+Rhapsody SE UI.
+
+The creation dialog runs RSE's own creation logic and commits a real element — which is why DOORS
+Next's *"create new"* on a link produces something the model contains. An engineer clicking through
+the UI and a client calling the advertised API get different outcomes from the same service provider.
+
+**How to see it, because every OSLC-side check agrees with the wrong answer:**
+
+| Check | Reports the element |
+|---|---|
+| `GET` on the created resource | yes |
+| OSLC query capability | yes |
+| An OSLC client such as Resource Navigator | yes |
+| SysML v2 `…/commits/{c}/elements/{id}`, every branch head | **no** (`UnknownElement` stub) |
+| `…/projects/{p}/commits` — a new commit | **no** |
+| Rhapsody SE UI | **no** |
+
+**Every view that shares the OSLC layer is self-consistent.** Confirming a create through a second
+OSLC client proves nothing; the second view has to be a second *stack* — the SysML v2 API or the
+product UI. Checking the project's commit list is the cheapest form of it: if a write produced no
+commit, it produced no model change.
+
+This subsumes quirk 60. The element cannot be deleted or reparented because the delete, the reparent
+and the JSON API all address a model that never contained it.
+
+**Practical consequence.** Creating architecture elements in Rhapsody SE from an API client requires
+the SysML v2 commit recipe below. The OSLC creation factory is usable only for resources that never
+need to be part of the model — which is to say, not for anything worth creating.
