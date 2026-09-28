@@ -2121,22 +2121,27 @@ its predicates has no label; and it cannot contribute to the query table, which 
 constant.
 
 `oslc_cm:relatedArchitectureElement` was **not in that table**, so it was never queried. Fixed
-2026-09-28 by adding it, mapped to itself as `oslc:related` is — OSLC declares no inverse term for it,
-and inventing one would be worse than the asymmetry.
+2026-09-28 by adding it, with its reverse named `am#relatedChangeRequest` — following the CM→QM
+pattern, where all four `cm#relatedTest*` types invert to `qm#relatedChangeRequest`.
+
+**That value names a direction; it is not a property.** Nothing declares or stores
+`am#relatedChangeRequest`. ETM *does* declare a real `oslc_qm:relatedChangeRequest`, and that is the
+thing **not** to copy: it is a **redundant backlink**, a second stored assertion for a relationship
+already recorded once on the change request — precisely what link discovery exists to make
+unnecessary. The link stays stored once; only its reverse gets a name to show.
 
 **The asymmetry behind it** is worth naming, because it is why this entry was easy to forget: the
 CM→AM predicate is declared in the **CM** namespace while every AM→anything predicate is `jazz_am:*`.
 Anyone assembling a table by walking the AM vocabulary will not meet it. The AAKI design noted the
 same oddity when resolving the EWM→AM link type; this is the bill for it.
 
-**Two more predicates carry the same blind spot.** `rm#validatedBy` and `qm#relatedChangeRequest`
-appear in the table only as inverse *values*, never as keys — so nothing queries them either. Recorded
-and guarded by a test rather than changed, since adding keys alters what every client asks LQE for.
+**Values that are not keys are correct, not a gap.** `rm#validatedBy`, `qm#relatedChangeRequest` and
+`am#relatedChangeRequest` appear only as inverse *values*. They are never queried, and should not be:
+**nothing stores them.** They name the far end of a link stored as `qm#validatesRequirement`,
+`cm#relatedTest*` or `cm#relatedArchitectureElement`. Querying a predicate nobody writes would find
+nothing by construction. (An earlier revision of this entry called that a blind spot. It is not.)
 
-**And the reverse still has no name.** The natural label for the reverse of
-`relatedArchitectureElement` is *"related change request"* — it is exactly how the four CM→QM link
-types invert, to `oslc_qm:relatedChangeRequest`. But **no such term exists on the AM side**, and that
-is not an oversight to work around by inventing one:
+**Why the reverse gets a name but not a term.** The AM side has no vocabulary to take one from:
 
 | Vocabulary | Declares |
 |---|---|
@@ -2144,10 +2149,10 @@ is not an oversight to work around by inventing one:
 | `oslc_am:` | **only `LinkType` and `Resource`** — no properties at all |
 | `jazz_am:` (Design Manager link types) | `derives`, `elaborates`, `external`, `refine`, `satisfy`, `trace` — no change-request term |
 
-So the reverse direction can be *labelled* but not *named*. Until a term exists, the entry maps to
-itself for querying, and a client wanting "Related Change Request" in the UI has to supply that label
-itself — there is no shape to read it from, because the property belongs to EWM and the resource being
-displayed belongs to someone else.
+So the reverse is *named* client-side, for display, and *labelled* client-side too — a client wanting
+"Related Change Request" in the UI must supply that string itself, because there is no shape to read it
+from: the property belongs to EWM while the resource being displayed belongs to someone else.
+Resource Navigator carries it as a built-in seeded into its inverse-label map.
 
 **Diagnostic order that works**, since an empty result is indistinguishable from a wrong question:
 call the API by hand with the predicate you expect. If it returns bindings, the index is fine and the
