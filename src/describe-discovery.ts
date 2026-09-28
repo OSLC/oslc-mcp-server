@@ -64,7 +64,19 @@ function describeProvider(sp: DiscoveredServiceProvider, prefix: string, probes?
         ? `${prefix}${createToolName(factory.title, factory.resourceType)}`
         : 'no tool generated (no shape)';
       lines.push(`- ${factory.title} — \`${tool}\` → ${factory.creationURI || '(no creation URI)'}`);
-      lines.push(`  - resource type: ${factory.resourceType || '(none)'}`);
+      // Every advertised type, not the first: which ones a factory declares is
+      // exactly what a create failure turns on, and the JSON projection of
+      // services.xml flattens the blank nodes that carry them.
+      const types = factory.resourceTypes?.length
+        ? factory.resourceTypes
+        : factory.resourceType
+          ? [factory.resourceType]
+          : [];
+      lines.push(`  - resource type${types.length > 1 ? 's' : ''}: ${types.join(', ') || '(none)'}`);
+      const shapeURIs = (factory.shapes ?? (factory.shape ? [factory.shape] : [])).map((sh) => sh.shapeURI);
+      if (shapeURIs.length > 1) {
+        lines.push(`  - shapes (${shapeURIs.length}): ${shapeURIs.join(', ')}`);
+      }
     }
   }
 

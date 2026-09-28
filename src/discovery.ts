@@ -77,7 +77,7 @@ export async function discoverServiceProvider(
   client: OSLCClient,
   spURI: string,
   sharedShapes: Map<string, DiscoveredShape> = new Map(),
-  sharedShapeDocs: Map<string, OSLCResource> = new Map()
+  sharedShapeDocs: Map<string, Promise<OSLCResource>> = new Map()
 ): Promise<DiscoveredServiceProvider | null> {
   let spResource: OSLCResource;
   try {
@@ -114,40 +114,71 @@ export async function discoverServiceProvider(
       const factoryTitle = spStore.anyValue(fn, dctermsNS('title')) ?? '';
       const creationNode = spStore.any(fn, oslcNS('creation'), null);
       const creationURI = creationNode?.value ?? '';
-      const resourceTypeNode = spStore.any(fn, oslcNS('resourceType'), null);
-      const resourceType = resourceTypeNode?.value ?? '';
-      const shapeNode = spStore.any(fn, oslcNS('resourceShape'), null);
+      // oslc:resourceType and oslc:resourceShape are BOTH Zero-or-many on a
+      // CreationFactory (OSLC Core 2.0). Taking `any()` of either is a guess,
+      // and on DOORS Next it is the wrong one: its Requirement Creation
+      // Factory advertises several resource types, rdflib returned
+      // jazz sse#UserRequirement, and every create failed with
+      //   403  CRRRS6401E  Error parsing content. Content must be valid rdf+xml.
+      // — an error naming the syntax although the body is well-formed XML and
+      // the real objection is the rdf:type. Collect all of both and let the
+      // create handler decide.
+      const resourceTypes = spStore
+        .each(fn, oslcNS('resourceType'), null)
+        .map((n) => n.value)
+        .filter((v) => v);
+      const resourceType = resourceTypes[0] ?? '';
+      const shapeNodes = spStore.each(fn, oslcNS('resourceShape'), null);
 
-      let shape: DiscoveredShape | null = null;
-      if (shapeNode) {
-        const shapeURI = shapeNode.value;
-        if (sharedShapes.has(shapeURI)) {
-          shape = sharedShapes.get(shapeURI)!;
-        } else {
+      // Fetched CONCURRENTLY, not one at a time. A factory advertising one
+      // shape cost one round trip and sequential code was fine; DOORS Next
+      // advertises ~21, and 21 sequential ELM round trips overran the MCP
+      // client's 30s startup handshake, so the server never came up at all.
+      // sharedShapeDocs caches the PROMISE rather than the resolved document
+      // so that concurrent requests for the same document still collapse to
+      // one fetch.
+      const shapeResults = await Promise.all(
+        shapeNodes.map(async (shapeNode): Promise<DiscoveredShape | null> => {
+          const shapeURI = shapeNode.value;
+          const cached = sharedShapes.get(shapeURI);
+          if (cached) return cached;
           try {
             const shapeDocURI = shapeURI.split('#')[0];
-            let shapeResource = sharedShapeDocs.get(shapeDocURI);
-            if (!shapeResource) {
+            let pending = sharedShapeDocs.get(shapeDocURI);
+            if (!pending) {
               // one line per DOCUMENT, not per fragment: the report stays as short
               // as the number of documents actually retrieved.
               console.error(`[discovery] Fetching shape document: ${shapeDocURI}`);
-              shapeResource = await client.getResource(shapeDocURI, '2.0', ACCEPT_RDF);
-              sharedShapeDocs.set(shapeDocURI, shapeResource);
+              pending = client.getResource(shapeDocURI, '2.0', ACCEPT_RDF);
+              sharedShapeDocs.set(shapeDocURI, pending);
             }
-            shape = parseShape(shapeResource, shapeURI !== shapeDocURI ? shapeURI : undefined);
-            sharedShapes.set(shapeURI, shape);
+            const shapeResource = await pending;
+            const parsed = parseShape(shapeResource, shapeURI !== shapeDocURI ? shapeURI : undefined);
+            sharedShapes.set(shapeURI, parsed);
+            return parsed;
           } catch (err) {
             const reason = err instanceof Error ? err.message : String(err);
             console.error(`[discovery] Failed to fetch shape ${shapeURI}:`, err);
             // Recorded rather than swallowed: generateTools emits a create
             // tool only when a shape is present, so this is why one is missing.
             failedShapes.push({ shapeURI, documentURI: shapeURI.split('#')[0], reason });
+            return null;
           }
-        }
-      }
+        })
+      );
+      const shapes: DiscoveredShape[] = shapeResults.filter(
+        (sh): sh is DiscoveredShape => sh !== null
+      );
 
       if (creationURI) {
-        factories.push({ title: factoryTitle, creationURI, resourceType, shape });
+        factories.push({
+          title: factoryTitle,
+          creationURI,
+          resourceType,
+          resourceTypes,
+          shape: shapes[0] ?? null,
+          shapes,
+        });
       }
     }
 
@@ -197,7 +228,7 @@ export async function discoverFromServiceProviders(
 ): Promise<DiscoveryResult> {
   const serviceProviders: DiscoveredServiceProvider[] = [];
   const shapes = new Map<string, DiscoveredShape>();
-  const shapeDocs = new Map<string, OSLCResource>();
+  const shapeDocs = new Map<string, Promise<OSLCResource>>();
 
   for (const spURI of spURIs) {
     console.error(`[discovery] Fetching scoped service provider: ${spURI}`);
@@ -254,7 +285,7 @@ export async function discover(
 
   const serviceProviders: DiscoveredServiceProvider[] = [];
   const shapes = new Map<string, DiscoveredShape>();
-  const shapeDocs = new Map<string, OSLCResource>();
+  const shapeDocs = new Map<string, Promise<OSLCResource>>();
 
   for (const spNode of spNodes) {
     const spURI = spNode.value;
