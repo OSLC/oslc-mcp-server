@@ -2018,49 +2018,61 @@ surfaces as a missing capability rather than as a naming problem. Generators sho
 they emit; they cannot assume a vocabulary is machine-friendly just because it is well-formed.
 
 
-### 56. A CDCM 500 surfaces as a DOORS Next *authentication* error
+### 56. CDCM answers a wrong `Accept` with `500`, and the same URL fails two different ways
 
-**Symptom (2026-09-28).** Resource Navigator can no longer open any DOORS Next or ETM resource. The
-client console shows a `400` from DOORS Next carrying:
+**The endpoint.** When an ELM application receives a `Configuration-Context` naming a global
+configuration, it asks CDCM to expand it:
 
 ```
-java.lang.RuntimeException: com.ibm.team.gc.sdk.service.exception.GcSdkAuthenticationException:
-  An error occurred running the operation "GET …/cdcm/…/components/{c}/contributions
-  ?configurationUri=…/configuration/{id} HTTP/1.1"
+GET …/components/{c}/contributions?configurationUri=…/configuration/{id}
 ```
 
-It reads as a broken friend/consumer relationship between DOORS Next and CDCM. **It is not.**
+**It is not an OSLC endpoint.** It is a Jazz GC SDK endpoint and it speaks **JSON** — it returns the
+configuration with a `children` array of contributions. Ask it for RDF and it does not answer `406`:
 
-**What is actually wrong.** CDCM's component-level `contributions` *collection* endpoint returns
-`500 Internal Server Error`. Measured with a valid user token, so authentication is not involved:
-
-| Path | Result |
+| Request | Result |
 |---|---|
-| `…/components/{c}/configuration/{id}` | **200** |
-| `…/components/{c}/configuration/{id}/contributions/{one}` | **200** |
-| `…/components/{c}/contributions` | **500** |
-| `…/components/{c}/contributions?configurationUri={any}` | **500** — for a stream, another stream, and a baseline alike |
+| `Accept: application/json` + `configurationUri` | **200**, the contributions |
+| `Accept: */*` + `configurationUri` | **200** |
+| `Accept: application/rdf+xml` | **500** |
+| `Accept: text/turtle` | **500** |
+| any `Accept`, **no** `configurationUri` | **500** |
 
-Individual configuration and individual contribution reads are fine, which is why nothing looks broken
-until something asks CDCM to **expand** a global configuration into its contributions — and that is
-precisely what an ELM application does when it receives a `Configuration-Context` naming a global
-configuration.
+So a content-negotiation failure and a missing required parameter are both reported as
+`500 Internal Server Error` with a `requestId`, where `406` and `400` are the answers. That is the
+defect, and it is a small one — but it is expensive, because of what it cost to work out.
 
-**Consequences, and how to tell this apart from a real auth fault.**
+### What it cost, and the lesson
 
-- Every ELM application fails under a **global** configuration context — DOORS Next `400`, ETM `401`. The two report it differently, and neither mentions `500`.
-- The same resources are **fine under a local configuration**: a DOORS Next stream returns `200`. That contrast is the fastest discriminator — if local works and global does not, suspect the configuration server, not the credential.
-- A genuine credential fault would fail the same way for a *single* contribution read. Here those still return `200`.
+**Symptom (2026-09-28).** Resource Navigator could not open any DOORS Next or ETM resource. DOORS Next
+returned `400` wrapping:
 
-**The lesson is the error message.** The Jazz GC SDK wraps any failure of its outbound call in
-`GcSdkAuthenticationException`, so a `500` from the configuration server is reported to the client as
-an authentication problem, at a different status code, by a different server. Three layers of
-misdirection: check what the configuration server itself returns before touching a friend
-relationship. Anonymous access to that endpoint answers `401 WWW-Authenticate: Bearer`, so the
-endpoint is reachable and does enforce auth — it simply also fails with a valid token.
+```
+GcSdkAuthenticationException: An error occurred running the operation
+  "GET …/components/{c}/contributions?configurationUri=… HTTP/1.1"
+```
 
-**Reporting it.** CDCM returns a `requestId` in the JSON body of the 500
-(e.g. `49a0c8f6e5ac461f8a24d69820783817`), which is what the server log needs.
+**The wrong conclusion, reached quickly and confidently.** Hitting that exact URL by hand returned
+`500`. Same URL, a failure, with a valid token — so the endpoint looked broken and the
+`GcSdkAuthenticationException` looked like a misleading wrapper around it. It was written up that way.
+
+**It was not the cause.** The `500` was a response to *my* request shape — RDF/XML, which that endpoint
+cannot produce. DOORS Next asks for JSON and was being answered correctly all along. When Resource
+Navigator recovered, the `500` was still there, unchanged, which is what exposed the error.
+
+**The tell was there from the start and was not read.** DOORS Next reported an *authentication*
+exception; the hand-run request produced a *500*. **Two different failures at the same URL.**
+Reproducing *a* failure against the endpoint named in an error is not reproducing *the* failure, and a
+matching URL is weak evidence when the error class does not also match.
+
+**What actually broke Resource Navigator is not known.** It recovered without a CDCM change. The outage
+coincided with the local OAuth token store emptying, so a transient on the identity side is the
+plausible story — but that is a hypothesis, not a measurement, and it is recorded here as one.
+
+**A cheap check worth keeping**, since this class of fault presents as a derivation failure rather than
+an infrastructure one: before a run that depends on global configurations, `GET` that endpoint with
+`Accept: application/json` and confirm the `children` array holds the expected contributions. One call,
+and it fails loudly instead of halfway through a beat.
 
 
 ---
