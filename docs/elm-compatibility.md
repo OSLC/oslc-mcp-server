@@ -2163,39 +2163,54 @@ client's link-type set is the defect. If it returns none, *then* ask whether the
 > design and its absence says nothing about the index.
 
 
-### 58. ETM has no query path to `validatesArchitectureElement` — select drops it, where rejects it
+### 58. ETM puts `validatesArchitectureElement` in the Jazz namespace, not the OSLC one
 
-**The question that cannot be asked.** *"Which test cases verify this architecture element?"* ETM
-stores the answer, on the test case, as `oslc_qm:validatesArchitectureElement`. Neither OSLC query
-mechanism will return it:
+**One shape, two namespaces.** On the ETM `VersionedTestCase` shape:
+
+| Property | `oslc:propertyDefinition` |
+|---|---|
+| `validatesRequirement` | `http://open-services.net/ns/qm#validatesRequirement` — **OSLC QM** |
+| `validatesArchitectureElement` | `http://jazz.net/ns/qm/rqm#validatesArchitectureElement` — **Jazz RQM** |
+
+They sit side by side, have identical `oslc:name` style, identical `readOnly`, `hidden` and
+`isMemberProperty`, and read as siblings. They are not.
+
+**What querying the wrong one looks like.** Using `oslc_qm:` for both:
 
 | Attempt | Result |
 |---|---|
-| `oslc.select=dcterms:title,oslc_qm:validatesArchitectureElement` | **200** — 27 test cases, 27 titles, and the predicate appears **once as a bare string, with zero `rdf:resource` values**. Silently dropped |
+| `oslc.select=…,oslc_qm:validatesArchitectureElement` | **200** — every test case, every title, and the column **silently absent** |
 | `oslc.where=oslc_qm:validatesArchitectureElement=<uri>` | **400 `AQXCM5002E The query was not run for this query URL`** |
-| `GET` on one test case | **the values are there** — `IT-4` returns three components |
+| `GET` on a test case | the values are there — under `rqm_qm:` |
 
-So the data exists and is reachable **only one resource at a time**. Answering "what verifies this
-component" means fetching every test case in the project area and filtering client-side.
+The `select` behaviour is the dangerous half: a well-formed `200` with a full result set whose column
+is missing reads as *"no test case validates any architecture element"*. That is the natural first
+query in an impact analysis, and it returns a confident wrong answer.
 
-**Why this is worse than it sounds.** The `select` failure is silent. A projection over all test cases
-returns `200` with a full, well-formed result set in which the column is simply absent — which reads
-as *"no test case validates any architecture element"*. That is a confident, wrong answer produced by
-a correct-looking query, and it is the natural first move for anyone doing impact analysis.
+**With the right namespace everything works**, in one query:
 
-It also removes the last fallback. For incoming links there are three mechanisms — LQE
-`/incoming-links`, LDM `/discover-links`, and OSLC query against the storing server. Rhapsody SE
-supports no TRS and no `/discover-links`, so every ELM→RSE link depends on the third. **For this
-predicate the third does not work either.**
+```
+oslc.prefix=rqm_qm=<http://jazz.net/ns/qm/rqm#>
+oslc.select=dcterms:title,rqm_qm:validatesArchitectureElement   -> 41 values
+oslc.where=rqm_qm:validatesArchitectureElement=<…/resource/e56bcbfa-…>
+   -> the three test cases that verify that component
+```
 
-**Measured 2026-09-28** on ETM 7.x, project area `Acme AEB-200 (Quality Management)`, with a global
-`Configuration-Context` set. `validatesRequirement` projects correctly on the same query in the same
-call, so this is per-predicate, not a broken query capability.
+So there is **no ETM limitation here**. Incoming links from test cases to architecture elements are
+fully queryable, which also means OSLC query remains a working fallback where LQE and LDM are not
+available — which for Rhapsody SE is always.
 
-**What to do.** Fetch the test cases and filter locally; budget for it, since it is one request per
-test case. And treat an empty column in an ETM projection as *unknown* rather than *absent* until a
-single `GET` has confirmed the property really is empty on at least one resource that should carry it.
+> **This entry previously claimed ETM had no query path to the property at all.** That was wrong, and
+> wrong in an instructive way: the `select` returned `200` with the column absent and the `where`
+> returned `400`, and both were read as evidence about the *server* rather than about the *query*. A
+> silently-dropped projection means "I asked for something this server does not recognise" at least as
+> often as it means "the data is not there". Check the shape's `oslc:propertyDefinition` — the full
+> URI, not the local name — before concluding anything about a server's capability.
 
+**The general trap.** A property's local name tells you nothing about its namespace, and ELM mixes
+OSLC and Jazz vocabularies within a single shape. `validatesRequirement` / `validatesArchitectureElement`
+here; `oslc_cm:relatedArchitectureElement` versus `jazz_am:*` in quirk 57. Read the
+`propertyDefinition`, always.
 
 ### 59. DOORS Next cannot authenticate to Rhapsody SE — an 814-byte access token into a 250-byte field
 
