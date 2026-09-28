@@ -2108,11 +2108,17 @@ linkType  = http://open-services.net/ns/cm#relatedArchitectureElement
 
 Nothing is missing from the index. The client simply never asked with that `linkType`.
 
-**Where the list of predicates comes from.** Ideally from the shape: Resource Navigator reads
-`oslc:inversePropertyLabel`, a MID extension declaring how to label a link's reverse direction. **ELM
-does not publish it**, so for ELM resources the client falls back to a **hard-coded table** —
-`INVERSE_LINK_TYPES` in `oslc-client`'s `LDMClient.js`, whose keys are exactly the `linkType` values
-sent to LQE.
+**Where the list of predicates comes from — and it is not where the labels come from.** Two separate
+mechanisms, easy to conflate:
+
+| | Source | Fallback |
+|---|---|---|
+| **Which predicates get queried** | `INVERSE_LINK_TYPES` in `oslc-client`'s `LDMClient.js` — hard-coded; its keys *are* the `linkType` values sent to LQE | none |
+| **How the reverse direction is labelled** | `oslc:inversePropertyLabel` on a resource shape, a MID extension, accumulated as shapes are parsed | **none** |
+
+**ELM publishes neither.** It does not declare `oslc:inversePropertyLabel`, so the reverse of one of
+its predicates has no label; and it cannot contribute to the query table, which is a client-side
+constant.
 
 `oslc_cm:relatedArchitectureElement` was **not in that table**, so it was never queried. Fixed
 2026-09-28 by adding it, mapped to itself as `oslc:related` is — OSLC declares no inverse term for it,
@@ -2126,6 +2132,22 @@ same oddity when resolving the EWM→AM link type; this is the bill for it.
 **Two more predicates carry the same blind spot.** `rm#validatedBy` and `qm#relatedChangeRequest`
 appear in the table only as inverse *values*, never as keys — so nothing queries them either. Recorded
 and guarded by a test rather than changed, since adding keys alters what every client asks LQE for.
+
+**And the reverse still has no name.** The natural label for the reverse of
+`relatedArchitectureElement` is *"related change request"* — it is exactly how the four CM→QM link
+types invert, to `oslc_qm:relatedChangeRequest`. But **no such term exists on the AM side**, and that
+is not an oversight to work around by inventing one:
+
+| Vocabulary | Declares |
+|---|---|
+| `oslc_qm:` | `relatedChangeRequest` — real |
+| `oslc_am:` | **only `LinkType` and `Resource`** — no properties at all |
+| `jazz_am:` (Design Manager link types) | `derives`, `elaborates`, `external`, `refine`, `satisfy`, `trace` — no change-request term |
+
+So the reverse direction can be *labelled* but not *named*. Until a term exists, the entry maps to
+itself for querying, and a client wanting "Related Change Request" in the UI has to supply that label
+itself — there is no shape to read it from, because the property belongs to EWM and the resource being
+displayed belongs to someone else.
 
 **Diagnostic order that works**, since an empty result is indistinguishable from a wrong question:
 call the API by hand with the predicate you expect. If it returns bindings, the index is fine and the
