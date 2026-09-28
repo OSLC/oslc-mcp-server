@@ -2065,9 +2065,11 @@ exception; the hand-run request produced a *500*. **Two different failures at th
 Reproducing *a* failure against the endpoint named in an error is not reproducing *the* failure, and a
 matching URL is weak evidence when the error class does not also match.
 
-**What actually broke Resource Navigator is not known.** It recovered without a CDCM change. The outage
-coincided with the local OAuth token store emptying, so a transient on the identity side is the
-plausible story — but that is a hypothesis, not a measurement, and it is recorded here as one.
+**What actually broke Resource Navigator was a CDCM-side fault**, corrected by a change on that server
+the same day; the specific change is not recorded here. It was *not* this `500`, which is unchanged
+and was never in the path. An earlier revision of this entry guessed at a transient on the identity
+side, because the outage coincided with the local OAuth token store emptying — that guess was wrong
+too, and the coincidence was exactly that.
 
 **A cheap check worth keeping**, since this class of fault presents as a derivation failure rather than
 an infrastructure one: before a run that depends on global configurations, `GET` that endpoint with
