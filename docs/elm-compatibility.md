@@ -695,10 +695,11 @@ returned **`200`** and left the state untouched. No error, no message. This is t
 shape as an ignored query parameter, and it is easy to build a "close all these items" loop that
 reports success while changing nothing.
 
-**So verify the transition took**, and verify it on **`oslc_cm:closed`**, not on the status string:
-closure reads `Done` for Task and Defect but `Accepted` for Capability, and the Capability workflow has
-no `Done` state at all. `oslc_cm:closed` is the boolean that means the same thing across every
-workflow.
+**So verify the transition took.** Do **not** verify it on `oslc_cm:closed` — an earlier revision of
+this note said to, and quirk 62 below shows why that is wrong on this deployment. Read
+`rtc_cm:state`, `oslc_cm:closeDate` and `oslc_cm:resolvedBy` instead, remembering that the status
+string differs per workflow: closure reads `Done` for Task and Defect but `Accepted` for Capability,
+and the Capability workflow has no `Done` state at all.
 
 [actions]: https://docs.oasis-open-projects.org/oslc-op/actions/v1.0/
 
@@ -2397,3 +2398,42 @@ and the JSON API all address a model that never contained it.
 **Practical consequence.** Creating architecture elements in Rhapsody SE from an API client requires
 the SysML v2 commit recipe below. The OSLC creation factory is usable only for resources that never
 need to be part of the model — which is to say, not for anything worth creating.
+
+
+### 62. `oslc_cm:closed` reads `"0"` on a closed work item
+
+**The check this document used to recommend gives the wrong answer**, and it fails in the direction
+that looks like diligence: a caller concludes the work is not done when it is.
+
+EWM `Task 583`, after being transitioned to Done by a user in the web UI:
+
+```
+rtc_cm:state       …/workflows/…/taskWorkflow/com.ibm.team.workitem.taskWorkflow.state.done
+oslc_cm:status     "Done"
+oslc_cm:closeDate  "2026-09-29T19:27:30.897Z"
+oslc_cm:resolvedBy …/jts/users/jamsden
+dcterms:modified   "2026-09-29T19:27:30.920Z"
+
+oslc_cm:closed     "0"        ← still false
+oslc_cm:approved   "0"
+oslc_cm:reviewed   "0"
+oslc_cm:verified   "0"
+oslc_cm:fixed      "0"
+oslc_cm:inprogress "0"
+```
+
+Not specific to that item: Defect 579 is `Done` with resolution `invalid` and an August `closeDate`,
+and also reads `closed: "0"`. The other booleans in that family are `"0"` too, so they look like a
+block of flags this deployment never populates rather than one stale value.
+
+**Verify closure on `rtc_cm:state`, corroborated by `oslc_cm:closeDate` and `oslc_cm:resolvedBy`.**
+`state` is workflow-specific, which is why `closed` looked like the better check — but a
+workflow-specific value that is correct beats a uniform one that is not. Where several workflows are
+in play, map each workflow's closed state once rather than trusting the boolean.
+
+**Found the hard way.** In AAKI beat 3 an assistant made a recorded architecture review the
+precondition for writing to two components under an open `weakReview` finding. The engineer performed
+the review and closed Task 583. Following this document's own advice, the assistant would have read
+`closed: "0"`, concluded the review had not happened, and declined a write that was properly
+authorised — a false negative indistinguishable from correct caution. It noticed and used `state`
+instead. See `genoslc-aspice-server` `docs/example/acme-aeb/thread/transcripts/beat-3.md`.
