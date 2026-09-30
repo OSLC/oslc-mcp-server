@@ -2437,3 +2437,80 @@ the review and closed Task 583. Following this document's own advice, the assist
 `closed: "0"`, concluded the review had not happened, and declined a write that was properly
 authorised — a false negative indistinguishable from correct caution. It noticed and used `state`
 instead. See `genoslc-aspice-server` `docs/example/acme-aeb/thread/transcripts/beat-3.md`.
+
+### 63. `isCurrent` reads `"0"` on the very result its execution record calls current
+
+Same family as quirk 62, on the ETM side, and it fails in the opposite direction: a caller concludes a
+failure has been superseded when it is the standing verdict.
+
+Result `_Fxh1YKLnEfGaeIQyzoLrcg`, "R1.0 execution — UT-3":
+
+```
+oslc_qm:status   "com.ibm.rqm.execution.common.state.failed"
+oslc_qm:verdict  …/ExecutionResult#com.ibm.rqm.execution.common.state.failed
+pointsFailed     "1"   of totalPoints "1"
+
+isCurrent        "0"        ← says it is not the current result
+```
+
+Its execution record, `_FwfTkKLnEfGaeIQyzoLrcg`, says otherwise — and says it three ways:
+
+```
+oslc_qm:currentTestResult      …/ExecutionResult/_Fxh1YKLnEfGaeIQyzoLrcg
+rqm_qm:lastFailedTestResult    …/ExecutionResult/_Fxh1YKLnEfGaeIQyzoLrcg
+oslc_qm:producesTestResult     …/ExecutionResult/_Fxh1YKLnEfGaeIQyzoLrcg
+
+rqm_qm:lastPassedTestResult    ← ABSENT
+```
+
+**The TestExecutionRecord is the reliable side.** Read currency from the TER's
+`oslc_qm:currentTestResult`, never from the result's own `isCurrent`.
+
+**The absent property is the more useful signal.** `rqm_qm:lastPassedTestResult` is simply not present
+when a test case has never passed, so its absence — not a false `isCurrent` — is what establishes
+"this has never gone green". A projection that selects it gets a silently empty column either way, so
+check for the property on the TER rather than inferring from the result.
+
+**Found the hard way.** In AAKI beat 4 an assistant reported a failing unit-verification result that
+sat inside an official ASPICE rating's evidence set. The result's `isCurrent: "0"` was the one piece of
+evidence that would have supported "superseded, nothing to see" — the comfortable reading. Checking the
+TER showed the failure was current and the gate had never passed. See `genoslc-aspice-server`
+`docs/example/acme-aeb/thread/transcripts/beat-4.md`.
+
+### 64. An EWM description is link-bearing: bare URLs in prose become graph edges
+
+Write a URL into a work-item description for a human reader and EWM harvests it into
+`com.ibm.team.workitem.linktype.textualReference.textuallyReferenced` — a property the caller never
+sent, on a resource the caller thought it fully specified.
+
+Creating two Tasks whose descriptions cited evidence by URL, the read-back carried:
+
+```
+Task 603  textuallyReferenced → http://jazz.net/ns/qm/rqm      ← a NAMESPACE URI
+Task 604  textuallyReferenced → …/WorkItem/598
+```
+
+The 603 case is the damaging one. The description named a vocabulary in full, as prose, to say which
+namespace a predicate belongs to. EWM turned that into a work-item link pointing at a namespace
+document — **junk in the link graph, created by writing correct documentation**. The 604 case points
+at a real work item and is roughly what the link type is for, so it is arguably benign; CR 597
+acquired the same kind of link to Defect 579 the same way.
+
+**Three consequences:**
+
+- **Name vocabularies without the scheme** in any text EWM will store — `jazz.net/ns/qm/rqm`, or the
+  prefix alone — unless you actually want the edge.
+- **Read back the link graph, not just the fields you set**, after any create or update whose text
+  contains a URL. The create response already shows it.
+- **This is the exception to not reporting unsent properties.** A server adding `dcterms:created` is
+  bookkeeping and noise; a server adding an edge has changed the graph, and downstream traversals will
+  find it.
+
+**Related, same call, different mechanism: descriptions are stored verbatim, so pre-escaped markup
+stays escaped.** Passing `&lt;br/&gt;` produces literal `&lt;br/&gt;` in the rendered description, not
+a line break. Send raw `<br/>`. EWM's own UI-authored descriptions carry raw tags plus a trailing
+`<!-- generated-from-rich-text-model-7.2-->` comment, which is the format to match.
+
+**Found the hard way.** In AAKI beat 5 both defects appeared in one batch of task creations; both were
+caught on read-back and fixed. See `genoslc-aspice-server`
+`docs/example/acme-aeb/thread/transcripts/beat-5.md`.
