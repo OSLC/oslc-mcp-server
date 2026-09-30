@@ -161,8 +161,8 @@ export class HttpToolContext {
     await this.client.deleteResource(resource, '2.0');
   }
 
-  async queryResources(queryURL: string, params: { filter?: string; select?: string; orderBy?: string }): Promise<string> {
-    const clauses = [params.filter, params.select, params.orderBy];
+  async queryResources(queryURL: string, params: { where?: string; select?: string; orderBy?: string }): Promise<string> {
+    const clauses = [params.where, params.select, params.orderBy];
     const parts: string[] = [];
 
     // Declare the prefixes the clauses use. Servers differ on what they
@@ -172,7 +172,7 @@ export class HttpToolContext {
     const prefixDeclaration = buildPrefixDeclaration(clauses);
     if (prefixDeclaration) parts.push(`oslc.prefix=${encodeURIComponent(prefixDeclaration)}`);
 
-    if (params.filter) parts.push(`oslc.where=${encodeURIComponent(params.filter)}`);
+    if (params.where) parts.push(`oslc.where=${encodeURIComponent(params.where)}`);
     if (params.select) parts.push(`oslc.select=${encodeURIComponent(params.select)}`);
     if (params.orderBy) parts.push(`oslc.orderBy=${encodeURIComponent(params.orderBy)}`);
 
@@ -229,7 +229,7 @@ export class HttpToolContext {
 }
 
 // Generic tool definitions (same as embedded middleware)
-const GENERIC_TOOLS: McpToolDefinition[] = [
+export const GENERIC_TOOLS: McpToolDefinition[] = [
   {
     name: 'create_service_provider',
     description:
@@ -335,8 +335,8 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
   {
     name: 'query_resources',
     description:
-      'Query OSLC resources using a query capability URL. With one consolidated QueryCapability per ServiceProvider, narrow by resource type by passing oslc.where=rdf:type=<...> in the filter argument. '
-      + 'Prefixes used in filter/select/orderBy are declared automatically for well-known vocabularies (dcterms, oslc, rdf, the OSLC domains, and the Jazz vocabularies); a prefix that cannot be declared is reported back as undeclaredPrefixes. '
+      'Query OSLC resources using a query capability URL. With one consolidated QueryCapability per ServiceProvider, narrow by resource type by passing rdf:type=<...> in the where argument. '
+      + 'Prefixes used in where/select/orderBy are declared automatically for well-known vocabularies (dcterms, oslc, rdf, the OSLC domains, and the Jazz vocabularies); a prefix that cannot be declared is reported back as undeclaredPrefixes. '
       + 'Returns { members, count, totalCount } — totalCount is the server\'s own count of the whole result set and may exceed count when the response is paged.',
     inputSchema: {
       type: 'object',
@@ -345,10 +345,10 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
           type: 'string',
           description: 'The query capability URL',
         },
-        filter: {
+        where: {
           type: 'string',
           description:
-            'OSLC query filter (oslc.where). Example: rdf:type=<http://www.omg.org/spec/BMM#Vision> or dcterms:title="My Resource"',
+            'OSLC query constraint (oslc.where). Example: rdf:type=<http://www.omg.org/spec/BMM#Vision> or dcterms:title="My Resource"',
         },
         select: {
           type: 'string',
@@ -360,6 +360,12 @@ const GENERIC_TOOLS: McpToolDefinition[] = [
         },
       },
       required: ['queryBase'],
+      // Reject an unknown property rather than ignoring it. Without this a
+      // caller who names the constraint `filter` -- as this tool once did, and
+      // as no OSLC server does -- gets an UNFILTERED result set and a 200,
+      // indistinguishable from a constraint that matched everything. A
+      // validation error naming the allowed properties is self-correcting.
+      additionalProperties: false,
     },
   },
   // Mirrors the oslc://catalog MCP resource. Some MCP host transports
@@ -880,7 +886,7 @@ export async function startServer(
             result = handleListResourceTypes(context as any, runtime.discovery);
             break;
           case 'query_resources':
-            result = await handleQueryResources(context as any, args as { queryBase: string; filter?: string; select?: string; orderBy?: string });
+            result = await handleQueryResources(context as any, args as { queryBase: string; where?: string; select?: string; orderBy?: string });
             break;
           case 'read_catalog': {
             const catalogHeader = `**Server:** ${context.serverName}\n**Base URL:** ${context.serverBase}\n\n`;
