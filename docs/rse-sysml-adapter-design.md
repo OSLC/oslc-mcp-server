@@ -106,6 +106,43 @@ read. They are immutable, so that read is cached once for the process, not per c
 **So the precondition holds.** No enrichment, no snapshot cache, no per-property provenance: one
 source of truth, read directly.
 
+### Internal and external links, and where RSE left the standard
+
+The SysML v2 API distinguishes **internal** references — between elements in one repository, by
+GUID — from **external** ones, to things outside it, by URL. Every structural relationship
+(`OwningMembership`, `FeatureMembership`, `FeatureTyping`) is internal: `owningRelatedElement` and
+friends carry `{"@id": "<guid>"}`. OSLC links are the external case by definition, since their
+targets live in DOORS Next, ETM and EWM.
+
+**The OMG API has a standard mechanism for this, and RSE does not implement it.** From the
+reference implementation's own OpenAPI:
+
+```
+ExternalData          { @id, @type, resourceIdentifier }
+ExternalRelationship  { @id, @type, elementEnd, externalDataEnd, language, specification }
+```
+
+Two elements: the external thing, and a relationship joining a SysML element to it. RSE refuses
+both — *`Unable to create commit: Type not recognized ExternalData`* — and uses its own pair
+instead, which appears nowhere in the OMG vocabulary or reference implementation:
+
+```
+OSLCLink      { @id, @type, linkType -> OSLCLinkType, linkURL, owningRelationship }
+OSLCLinkType  { @id, @type, declaredName, linkLabel, linkTypeURI }
+```
+
+So RSE **collapses** `ExternalData` and `ExternalRelationship` into one element with the URL
+inline, reaches its source through containment rather than an `elementEnd`, and adds something the
+standard shape has no place for: a **typed** link, whose `linkTypeURI` is a real predicate
+(`http://jazz.net/ns/dm/linktypes#satisfy`). `ExternalRelationship` would have to smuggle that
+through `language`/`specification` as prose.
+
+**The divergence is defensible, and the adapter has no choice anyway** — `OSLCLink` is what exists.
+What follows for the design is narrower: link handling is the one part most likely to be wrong on a
+different SysML v2 server, so it stays isolated behind `indexLinks` and the link half of the write
+path. A server that implements the standard shape should be a module to add, not a design to
+revisit.
+
 ### Two conversions the adapter owns
 
 **1. `Configuration-Context` → commit.** SysML reads are commit-scoped and OSLC callers speak
