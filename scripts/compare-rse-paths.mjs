@@ -17,6 +17,7 @@
 import { readFileSync } from 'node:fs';
 import rdflib from 'rdflib';
 import { parseRseContext, resolveCommit } from '../dist/adapters/rse-sysml/context.js';
+import { resolveAnyContext, describeContributions, GC_ACCEPT } from '../dist/adapters/rse-sysml/global-config.js';
 import { runQuery, fetchCommitElements, linkNext } from '../dist/adapters/rse-sysml/query.js';
 import {
   NOT_EXPOSED, projectResource, indexDescriptions, indexLinks, resourceUri,
@@ -32,11 +33,13 @@ const cfg = readFileSync(args.config ?? 'oslc-mcp-server-acme.yaml', 'utf8');
 const ctxUri = /configurationContext:\s*(\S+)/.exec(
   cfg.slice(cfg.indexOf('alias: rse')))?.[1]
   ?? /(https:\/\/\S*oslc_config\/\S+)/.exec(cfg.slice(cfg.indexOf('alias: rse')))?.[1];
-const rse = parseRseContext(ctxUri);
-if (!rse) { console.error(`No RSE configuration context found (saw ${ctxUri}).`); process.exit(2); }
-
-const BASE = new URL(ctxUri).origin + '/api';
+// --context accepts EITHER an RSE stream or a CDCM global configuration. The
+// second is the point: it is what every other server in the estate is given,
+// and what RSE has needed pinning to avoid.
+const given = args.context ?? ctxUri;
+const BASE = (args['rse-base'] ?? 'https://trs-filter-light.smartfacts.com') + '/api';
 const H = { Authorization: `Bearer ${TOKEN}` };
+const ELM = process.env.ELM_TOKEN ?? TOKEN;   // same identity; the estate shares one
 const http = {
   get: async (url) => { const r = await fetch(url, { headers: H }); return { status: r.status, data: await r.json() }; },
   post: async (url, body) => {
@@ -49,17 +52,31 @@ const http = {
     const r = await fetch(url, { headers: H });
     return { data: await r.json(), linkNext: linkNext(r.headers.get('link')) };
   },
+  // CDCM serves RDF/XML and nothing else: turtle and JSON both answer 500.
+  getRdf: async (url) => {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${ELM}`, Accept: GC_ACCEPT } });
+    if (!r.ok) throw new Error(`GET ${url} -> HTTP ${r.status}`);
+    return r.text();
+  },
 };
 
+if (!parseRseContext(given)) {
+  console.log('context is not an RSE stream — resolving it as a global configuration:');
+  for (const c of await describeContributions(http, given)) {
+    console.log(`  ${(c.title ?? '').padEnd(32)} ${c.configuration ?? ''}`);
+  }
+}
+const rse = await resolveAnyContext(http, BASE, given);
 const commit = await resolveCommit(http, BASE, rse);
 const AM = `${BASE}/oslc_am/${rse.projectId}`;
+const ctxUriForAm = `${BASE}/oslc_config/${rse.projectId}/stream/${rse.branchId}`;
 console.log(`project ${rse.projectId}\nbranch  ${rse.branchId}\ncommit  ${commit}\n`);
 
 // ---- path A: OSLC AM, which is what runs with the adapter disabled ----------
 // No oslc.select: ask for everything RSE will give, so the comparison is against
 // its fullest answer rather than against what we thought to request.
 const amRes = await fetch(`${AM}/resource`,
-  { headers: { ...H, Accept: 'text/turtle', 'Configuration-Context': ctxUri } });
+  { headers: { ...H, Accept: 'text/turtle', 'Configuration-Context': ctxUriForAm } });
 const ttl = await amRes.text();
 const store = rdflib.graph();
 rdflib.parse(ttl, store, AM, 'text/turtle');
