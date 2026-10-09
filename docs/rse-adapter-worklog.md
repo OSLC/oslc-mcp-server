@@ -186,3 +186,41 @@ run green against the live estate. **Nothing is pushed.**
 implemented, so `rse_get_resource` still goes through raw OSLC. The remaining work is integration
 plus a test that the disabled path is byte-identical to today — which is also the removability
 proof the design promises.
+
+## 18:10 — wired into the handlers, and beat 3 redone
+
+**Wiring.** `adapter: rse-sysml` on a server entry now puts the adapter in front of `get_resource`;
+without it every handler is what it was. The configuration is read per call rather than captured,
+so `set_configuration_context` still works, and every projected resource carries `_servedBy`
+naming the adapter, the source and the commit. Exercised with both kinds of context — the global
+configuration (97 members) and a branch at run-2's start commit (93, the R1.0 count).
+
+**The branch question, answered the hard way.** A branch cannot be reverted over the API.
+`POST /branches` answers 201 and the branch **reads** correctly, but its head is its own id rather
+than the commit asked for, and **every write to it fails** with a generic 500 — including a payload
+that commits fine to a UI-made branch. `isPrivate: false` is rejected outright, so the server forces
+a private branch and that is what is unusable. There is no route to move a head either. Quirk 37f.
+
+So cutting a stream stays a Rhapsody SE UI operation, which is what `run-setup.md` step 5 already
+assumes. Beat 3 was therefore redone on the void run-2 branch with distinct names, which proves the
+mechanism rather than the starting state.
+
+**Beat 3, redone through the adapter:**
+
+```
+commit 1  7 elements in one commit        (the original used three commits for five)
+commit 2  wired, three directions         (the original's fourth commit was rejected)
+
+ok  UNIT-SF-ILLUM is a resource          ok  it points up at its membership
+ok  its documentation is dcterms:description   ok  it owns its documentation and typing
+ok  its rdf:type is a vocabulary URI     ok  CMP-SF owns the feature membership
+ok  the resource set grew by four
+```
+
+**Two commits against five, nothing orphaned, and the description readable over OSLC** — which is
+the thing neither run could do. The original beat 3 landed three of five commits, had the fourth
+rejected for echoing derived properties, left seven unwired elements, and was abandoned.
+
+**Artifacts left on the void run-2 branch**, deliberately: six test links, a `PROBE` part
+definition, and the redo's seven elements. The branch is void and run-3 cuts fresh streams from
+R1.0, so none of it survives into a run.
