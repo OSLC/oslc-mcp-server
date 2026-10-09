@@ -1354,6 +1354,31 @@ project-level, so enumerating the seven link types and their `linkTypeURI`
 > (quirk 37b). Without that guard the query looked perfect: 1000 `Documentation` rows, all
 > correctly typed, from a commit holding 23.
 
+### 37f. A branch created through the API ignores the commit you ask for, and cannot be written to
+
+`POST /projects/{p}/branches` with `{"@type":"Branch","name":...,"head":{"@id":"<commit>"}}`
+answers **201** and produces a branch that **reads correctly** — the elements at its head are the
+ones expected. Two things are wrong with it:
+
+- **The head is not the commit requested.** It comes back as the branch's own `@id`.
+- **Every commit to it fails** with `500 A sysml-server internal error has occurred` — including a
+  single bare `PartDefinition` that the same payload commits successfully to a branch made in the
+  Rhapsody SE UI.
+
+The two branches differ visibly: a UI-made one is `isPrivate: false` with a real commit as `head`;
+an API-made one is `isPrivate: true` with its own id. Passing `isPrivate: false` does not help —
+the create is then **rejected outright**, as is `referencedCommit` in place of `head`, and omitting
+the head altogether.
+
+**So a branch cannot be reverted, re-cut or rolled back over the API.** There is no route to move a
+branch head — `conf/routes` offers GET, POST and DELETE on branches and nothing else — and the one
+route that looks like it would create a usable branch does not. Cutting a stream remains a
+Rhapsody SE UI operation, which is what the run procedure already assumes.
+
+**The read/write asymmetry is the trap.** A branch that answers reads correctly looks like a
+working branch, and the write that proves otherwise comes back as an internal error rather than as
+"this branch is not usable".
+
 ### 38. Deletion is a trap at both ends, and elements become permanently undeletable
 
 `DELETE` on a cleanly created, untouched AM resource works: 200, then 404. Beyond that:
