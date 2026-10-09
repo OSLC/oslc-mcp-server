@@ -72,8 +72,36 @@ describe('fetchCommitElements', () => {
       .rejects.toThrow(/cannot read response headers/);
   });
 
-  it('raises when a page is not a list', async () => {
-    const http = { ...base, getWithHeaders: async () => ({ data: { '@type': 'Error' } }) };
+  // An Error body is caught by the classifier first, which has the server's own
+  // description — a better message than "not a list".
+  it('surfaces the server\'s description when a page is an Error body', async () => {
+    const http = { ...base, getWithHeaders: async () => ({ data: { '@type': 'Error', description: 'Branch not found' } }) };
+    await expect(fetchCommitElements(http, 'https://h/api', 'P', 'C')).rejects.toThrow(/Branch not found/);
+  });
+
+  it('raises when a page is neither a list nor an error', async () => {
+    const http = { ...base, getWithHeaders: async () => ({ data: { '@id': 'a', '@type': 'PartUsage' } }) };
     await expect(fetchCommitElements(http, 'https://h/api', 'P', 'C')).rejects.toThrow(/not a list/);
+  });
+
+  // 200 [] is what a commit that does not exist returns, and it is far more
+  // plausible as "the model is empty" than as "you asked the wrong question".
+  it('refuses an empty result whose commit does not resolve', async () => {
+    const http = {
+      get: async () => ({ status: 500, data: { '@type': 'Error', description: 'no such commit' } }),
+      post: async () => ({ status: 200, data: [] }),
+      getWithHeaders: async () => ({ data: [] }),
+    };
+    await expect(fetchCommitElements(http, 'https://h/api', 'P', 'C'))
+      .rejects.toThrow(/bad commit id, not an empty configuration/);
+  });
+
+  it('allows an empty result when the commit does resolve', async () => {
+    const http = {
+      get: async () => ({ status: 200, data: { '@id': 'C', '@type': 'Commit' } }),
+      post: async () => ({ status: 200, data: [] }),
+      getWithHeaders: async () => ({ data: [] }),
+    };
+    await expect(fetchCommitElements(http, 'https://h/api', 'P', 'C')).resolves.toEqual([]);
   });
 });

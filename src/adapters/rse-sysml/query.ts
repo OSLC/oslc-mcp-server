@@ -13,6 +13,7 @@
  * commit-scoped and which pages honestly, with a `Link ... rel="next"` cursor.
  */
 import type { Http } from './context.js';
+import { classify, expectOk } from './classify.js';
 
 /**
  * The page size sent on every query.
@@ -62,12 +63,30 @@ export async function fetchCommitElements(
   // hang the tool rather than fail it, which is worse.
   for (let page = 0; url && page < 1000; page++) {
     const r: { data: unknown; linkNext?: string } = await get(url);
-    if (!Array.isArray(r.data)) {
+    const body = expectOk<unknown>(200, r.data, `RSE commit ${commitId} elements page ${page}`);
+    if (!Array.isArray(body)) {
       throw new Error(`RSE: commit ${commitId} elements page ${page} was not a list: ` +
-                      `${JSON.stringify(r.data).slice(0, 200)}`);
+                      `${JSON.stringify(body).slice(0, 200)}`);
     }
-    out.push(...(r.data as Record<string, unknown>[]));
+    out.push(...(body as Record<string, unknown>[]));
     url = r.linkNext;
+  }
+
+  // **An empty result cannot be trusted on its own.** A commit that does not
+  // exist answers `200 []` — indistinguishable from a configuration that is
+  // genuinely empty, and far more plausible than an error, so an assistant would
+  // report "the model is empty" rather than "I asked the wrong question". The
+  // commit itself can be checked, and is: it answers 200 for a real one and an
+  // Error for a fabricated one.
+  if (out.length === 0) {
+    const c = await http.get(`${baseUrl}/projects/${projectId}/commits/${commitId}`);
+    const o = classify(c.status, c.data, `RSE commit ${commitId}`);
+    if (o.kind !== 'ok') {
+      throw new Error(
+        `RSE: commit ${commitId} holds no elements, and the commit itself does not resolve — ` +
+        `so this is a bad commit id, not an empty configuration. ${o.kind === 'error' ? o.message : ''}`
+      );
+    }
   }
   return out;
 }

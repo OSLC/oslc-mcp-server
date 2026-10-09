@@ -1,3 +1,4 @@
+import { expectOk } from './classify.js';
 /**
  * Turning an OSLC configuration context into the commit a SysML v2 read needs.
  *
@@ -47,7 +48,11 @@ export async function resolveCommit(
 ): Promise<string> {
   if (ctx.kind === 'stream') {
     const r = await http.get(`${baseUrl}/projects/${ctx.projectId}/branches/${ctx.branchId}`);
-    const head = (r.data as { head?: { '@id'?: string } })?.head?.['@id'];
+    // Payload first: a missing branch is an Error body, and the status it comes
+    // with is not something to rely on. See classify.ts.
+    const branch = expectOk<{ head?: { '@id'?: string } }>(
+      r.status, r.data, `RSE branch ${ctx.branchId}`);
+    const head = branch?.head?.['@id'];
     if (!head) {
       throw new Error(
         `RSE: branch ${ctx.branchId} returned no head commit. Without one there is nothing to ` +
