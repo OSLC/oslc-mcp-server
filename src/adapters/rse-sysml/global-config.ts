@@ -68,8 +68,12 @@ export interface GcHttp extends Http {
  * Measured on the AEB-200 estate, 2026-10-09: that global configuration is
  * **flat**, four contributions, all leaves, exactly one of them RSE. So the
  * limitation costs nothing here and will cost everything on a real programme.
- * `?depth=all` is ignored by CDCM — byte-identical response — so the traversal
- * route still has to be found.
+ * The ordering key is already on the wire: `oslc_config:contributionOrder`,
+ * sparse rather than positional — AEB-200's four are 0, 1, 3 and 10. So the
+ * traversal can be done here (depth-first, children sorted by that key, first
+ * match wins) without the server endpoint, which is the authority and cheaper
+ * but not a prerequisite. `?depth=all` is ignored by CDCM, so that route is not
+ * guessable and should be read from the CDCM source rather than probed for.
  */
 export async function resolveGlobalConfiguration(
   http: GcHttp, gcUri: string, rseBaseUrl: string

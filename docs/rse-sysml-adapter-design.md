@@ -179,8 +179,25 @@ and could not distinguish from the right one.
 
 Measured on AEB-200, 2026-10-09: that configuration is **flat** — four contributions, all leaves,
 exactly one RSE. So this costs nothing in the example and everything on a real programme.
-`?depth=all` is ignored by CDCM (byte-identical response), so the traversal route still has to be
-found. **This is the next piece of work on the adapter.**
+**What is already known about how to do it**, which is more than it first appeared:
+
+- **`oslc_config:contributionOrder` is served on every contribution**, and it is sparse — AEB-200's
+  four are `0.0`, `1.0`, `3.0`, `10.0` — so it is an explicit ordering key, not a position. It is
+  already in the RDF the adapter reads.
+- **CDCM implements the traversal**, written here; **GCM's behaviour was established by
+  inspection** rather than from documentation, which is worth remembering when relying on it. The
+  GCM side of that work is in `smartfacts.cdcm.gcm-import` —
+  `RdfProperties.OSLC_CONFIG_CONTRIBUTION_ORDER`, `GcmContributionRdf`, and `ConfigurationImporter`,
+  which defaults a missing order to `0`.
+- So the adapter can do this **client-side**: depth-first over `oslc_config:contribution`, children
+  sorted by `contributionOrder`, first match wins. The server endpoint is the authority and is
+  cheaper — one request instead of a walk — but it is not a prerequisite. Its route is in the CDCM
+  source, which is not checked out here.
+- `?depth=all` is ignored by CDCM — byte-identical response — so the route is not guessable and
+  should be read rather than probed for.
+
+**This is the next piece of work on the adapter**, and the client-side version is small enough to
+do first and check against CDCM's answer afterwards.
 
 **That is worth more than the gap-filling.** It removes the pinned `configurationContext` in the
 yaml, the only per-run file edit in the whole setup, the `allServers: false` discipline that exists
