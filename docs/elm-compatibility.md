@@ -1639,10 +1639,28 @@ No `Annotation` is involved. `Documentation.annotatedElement` is derived and can
 rejected both as an array (`Expected type "ElementRef" to be an object`) and as an object
 (`wrong format of property annotatedElement`).
 
-**Both directions are required.** Set the membership's ends and *not* the element's
-`ownedRelationship`, and the description exists in the API, reads back perfectly, and is **invisible in
-the UI** — the UI trusts the forward list (quirk 31). That is how 22 correct-looking descriptions can be
-staged and none appear.
+**Three directions are required, and this recipe said two** until measured properly on 2026-10-09.
+Across the 256 native elements of the AEB-200 model:
+
+| | `owningRelationship` |
+|---|---|
+| an owned **Element** — `PartUsage` 10/10, `Documentation` 22/22, `InterfaceDefinition` 4/4, `OSLCLink` 44/44 | **always set**, at the membership that owns it |
+| a **Relationship** — `OwningMembership` 0/105, `FeatureMembership` 0/14, `FeatureTyping` 0/16 | **never set**; owned through its own `owningRelatedElement` |
+| a **root-level** Element — `Package` 0/2, and 11 of 19 `PartDefinition` | not set; no owner |
+
+It is **stored, not derived**: setting it on an element created by the two-commit recipe above is
+accepted and reads back. So the wiring commit must carry the membership's two ends, the element's
+forward `ownedRelationship`, **and the element's `owningRelationship`**.
+
+Set only the first two and the description exists in the API, reads back perfectly, and is
+**invisible in the UI** — the UI trusts the forward list (quirk 31). That is how 22 correct-looking
+descriptions can be staged and none appear. Omit the third as well and the element differs from
+every natively created one, which is harder to notice and worse to debug.
+
+**An update merges; it does not replace.** A payload carrying only `@type`, `@id` and the single
+property being changed leaves `declaredName` and `body` intact — measured. A read-before-write is
+therefore never needed, and with the derived-property rule above the discipline reduces to one
+sentence: **send exactly what you are changing, and nothing else.**
 
 **Batch, and order by dependency.** `change` takes many entries, so a whole hierarchy can be created in
 one commit and wired in a second. Only two round trips are needed regardless of size: create
