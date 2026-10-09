@@ -163,6 +163,25 @@ not a configuration URI, so it serves its default branch or fails. The adapter c
 `run-setup.md` step 7 tells a human to do: fetch the global configuration, walk
 `oslc_config:contribution`, and take the one whose configuration is an RSE stream.
 
+**Known limitation, and it is not small: one level, one candidate.** A global configuration is in
+general a **hierarchy** — a contribution may itself be a global configuration — and such a
+hierarchy can contain **several** RSE configurations. Which one applies is the **version skew**
+problem, and it has an established answer:
+
+> GCM and CDCM each expose a **non-standard** REST API returning a **depth-first traversal** of the
+> hierarchy as a flat, ordered list. The consumer takes the **first matching** contribution. That
+> ordering *is* the convention for resolving skew, and Rhapsody SE follows it.
+
+The adapter does not use that traversal yet. Until it does it walks one level and **refuses** when
+it finds more than one candidate, or when a contribution is itself a global configuration, rather
+than choosing — picking arbitrarily would mean reading a configuration the caller did not ask for
+and could not distinguish from the right one.
+
+Measured on AEB-200, 2026-10-09: that configuration is **flat** — four contributions, all leaves,
+exactly one RSE. So this costs nothing in the example and everything on a real programme.
+`?depth=all` is ignored by CDCM (byte-identical response), so the traversal route still has to be
+found. **This is the next piece of work on the adapter.**
+
 **That is worth more than the gap-filling.** It removes the pinned `configurationContext` in the
 yaml, the only per-run file edit in the whole setup, the `allServers: false` discipline that exists
 solely because of it, and RSE's standing as *the one real exception*. `set_configuration_context`

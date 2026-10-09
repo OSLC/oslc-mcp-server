@@ -54,6 +54,29 @@ describe('resolveGlobalConfiguration', () => {
     await expect(resolveGlobalConfiguration(http(other), GC, RSE)).resolves.toBeNull();
   });
 
+  // Version skew: a hierarchy can hold several RSE configurations, and which
+  // one applies is decided by the depth-first order of the GCM/CDCM traversal
+  // API. Until that is used, choosing would mean reading a configuration the
+  // caller did not ask for and could not tell apart from the right one.
+  it('refuses to choose when two RSE configurations are contributed', async () => {
+    const two = { ...docs,
+      [`${GC}/contributions/4`]: conDoc(`${GC}/contributions/4`, 'Other design models',
+        `${RSE}/oslc_config/P9/stream/BOTHER`) };
+    await expect(resolveGlobalConfiguration(http(two), GC, RSE))
+      .rejects.toThrow(/contributes 2 configurations/);
+  });
+
+  it('refuses rather than returning null when the hierarchy is nested', async () => {
+    const nested = {
+      [GC]: gcDoc(`${GC}/contributions/1`),
+      [`${GC}/contributions/1`]: conDoc(`${GC}/contributions/1`, 'A sub-configuration', `${GC}/sub`),
+      [`${GC}/sub`]: rdf(`<rdf:Description rdf:about="${GC}/sub">` +
+        `<oslc_config:contribution rdf:resource="${GC}/sub/contributions/1"/></rdf:Description>`),
+    };
+    await expect(resolveGlobalConfiguration(http(nested), GC, RSE))
+      .rejects.toThrow(/not traversed yet/);
+  });
+
   it('returns null for a global configuration with no contributions', async () => {
     await expect(resolveGlobalConfiguration(http({ [GC]: gcDoc() }), GC, RSE)).resolves.toBeNull();
   });

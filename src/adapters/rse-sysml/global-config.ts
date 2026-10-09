@@ -44,6 +44,32 @@ export interface GcHttp extends Http {
  * adapter is configured for. The shape alone is not enough — ETM's contribution
  * URI also contains `/oslc_config/`, and a second SysML server in the same
  * global configuration would otherwise be indistinguishable from ours.
+ *
+ * ## Known limitation: one level, and one candidate
+ *
+ * **This walks the given configuration's own `oslc_config:contribution` list and
+ * no further.** A global configuration is in general a HIERARCHY — a
+ * contribution may itself be a global configuration with contributions of its
+ * own — and such a hierarchy can contain **several** RSE configurations. Which
+ * one applies is the *version skew* problem, and it has a real answer that this
+ * does not yet implement:
+ *
+ * > GCM and CDCM each expose a **non-standard** REST API returning a
+ * > **depth-first traversal** of the hierarchy as a flat, ordered list. The
+ * > consumer takes the **first matching** contribution. That ordering is the
+ * > convention for resolving skew, and Rhapsody SE itself follows it.
+ *
+ * Until that traversal is used, this function must not choose between
+ * candidates, so **finding more than one is an error** rather than a
+ * first-wins guess. Picking arbitrarily would mean reading a configuration the
+ * caller did not ask for and could not tell apart from the right one — the
+ * failure this adapter exists to stop making.
+ *
+ * Measured on the AEB-200 estate, 2026-10-09: that global configuration is
+ * **flat**, four contributions, all leaves, exactly one of them RSE. So the
+ * limitation costs nothing here and will cost everything on a real programme.
+ * `?depth=all` is ignored by CDCM — byte-identical response — so the traversal
+ * route still has to be found.
  */
 export async function resolveGlobalConfiguration(
   http: GcHttp, gcUri: string, rseBaseUrl: string
@@ -54,16 +80,38 @@ export async function resolveGlobalConfiguration(
     .each(rdflib.sym(gcUri), rdflib.sym(`${CFG}contribution`), null)
     .map((n) => (n as { value: string }).value);
 
+  const matches: { uri: string; ctx: RseContext }[] = [];
+  let nested = 0;
   for (const c of contributions) {
     const cg = parseRdf(await http.getRdf(c), c);
     const cfg = cg.any(rdflib.sym(c), rdflib.sym(`${CFG}configuration`), null) as
       { value?: string } | null;
     const uri = cfg?.value;
     if (!uri) continue;
+    // A contribution whose configuration has contributions of its own is a
+    // nested global configuration. Counting them is not traversing them, but a
+    // caller deserves to know the answer may be incomplete.
+    const sub = parseRdf(await http.getRdf(uri), uri)
+      .each(rdflib.sym(uri), rdflib.sym(`${CFG}contribution`), null);
+    if (sub.length > 0) nested++;
     const ctx = parseRseContext(uri);
-    if (ctx && new URL(uri).origin === wanted) return ctx;
+    if (ctx && new URL(uri).origin === wanted) matches.push({ uri, ctx });
   }
-  return null;
+
+  if (matches.length > 1) {
+    throw new Error(
+      `RSE: ${gcUri} contributes ${matches.length} configurations for ${wanted} — ` +
+      `${matches.map((m) => m.uri).join(', ')}. Which one applies is decided by the depth-first ` +
+      `order of the GCM/CDCM traversal API, which this adapter does not yet use, so it will not ` +
+      `guess. Set the RSE stream directly for now.`);
+  }
+  if (matches.length === 0 && nested > 0) {
+    throw new Error(
+      `RSE: ${gcUri} has no RSE contribution of its own, and ${nested} of its contributions are ` +
+      `themselves global configurations. Nested hierarchies are not traversed yet. Set the RSE ` +
+      `stream directly for now.`);
+  }
+  return matches[0]?.ctx ?? null;
 }
 
 /** A contribution's title, for saying which one was chosen. */
