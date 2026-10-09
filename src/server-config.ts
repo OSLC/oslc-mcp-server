@@ -22,6 +22,9 @@ export interface ServerConfig {
    * exactly as before.
    */
   oauth?: ResolvedOAuth;
+  /** An adapter in front of this server's tools; see `ServerEntry.adapter`. */
+  adapter?: 'rse-sysml';
+
 }
 
 /** One configured server, ready to construct a client for. */

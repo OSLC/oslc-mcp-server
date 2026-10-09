@@ -31,6 +31,7 @@ import type { ServerConfig } from './server-config.js';
 import type { CatalogResolution } from './catalog-resolution.js';
 import { resolveConfigurationCatalogUrl } from './catalog-resolution.js';
 import { describeDiscovery, describeDiscoveryDocument } from './describe-discovery.js';
+import { createRseAdapter, httpFromAxios, type RseAdapter } from './adapters/rse-sysml/index.js';
 import { DEFAULT_REPORT_PATH } from './config-file.js';
 import { runProbe, type ProbeRun } from './probe/orchestrate.js';
 import { formatProbeReport } from './probe/report.js';
@@ -517,6 +518,10 @@ export interface StartedServer {
 interface ServerRuntime {
   spec: StartedServer;
   context: HttpToolContext;
+  /** Present only when the entry names one. Null is the whole of the
+   *  removability guarantee: every handler below falls through to the OSLC
+   *  path it has always used. */
+  adapter: RseAdapter | null;
   discovery: DiscoveryResult;
   handlers: Map<string, (args: any) => Promise<string>>;
   tools: McpToolDefinition[];
@@ -676,9 +681,25 @@ export async function startServer(
       spec.client, spec.config.serverURL, spec.config.catalogURL, spec.alias
     );
 
+    const adapter = spec.config.adapter === 'rse-sysml'
+      ? createRseAdapter({
+          baseUrl: spec.config.serverURL.replace(/\/+$/, ''),
+          // Read per call, not captured: set_configuration_context changes it.
+          currentContext: () => spec.config.configurationContext,
+          http: httpFromAxios((spec.client as any).client),
+        })
+      : null;
+    if (adapter) {
+      console.error(
+        `[startup] ${spec.alias}: rse-sysml adapter ENABLED — reads are served from the SysML v2 ` +
+        `services, which carry dcterms:description and typed links that RSE's OSLC AM surface ` +
+        `does not. Remove \`adapter: rse-sysml\` to see the raw provider.`);
+    }
+
     const runtime: ServerRuntime = {
       spec,
       context,
+      adapter,
       discovery: spec.discovery,
       handlers: new Map(),
       tools: [],
@@ -811,7 +832,11 @@ export async function startServer(
             break;
           }
           case 'get_resource':
-            result = await handleGetResource(context as any, args as { uri: string });
+            // The adapter answers when the entry enabled one; otherwise this is
+            // byte for byte what it has always been.
+            result = runtime.adapter
+              ? await runtime.adapter.getResource((args as { uri: string }).uri)
+              : await handleGetResource(context as any, args as { uri: string });
             break;
           case 'update_resource':
             result = await handleUpdateResource(context as any, runtime.discovery, args as { uri: string; properties: Record<string, unknown> });

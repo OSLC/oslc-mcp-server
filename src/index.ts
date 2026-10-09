@@ -86,6 +86,7 @@ function resolveServers(args: CliArgs):
           username,
           password,
           configurationContext: entry.configurationContext,
+          adapter: entry.adapter,
           oauth: oauth ?? undefined,
         },
         serviceProviderURIs: (entry.serviceProviders ?? []).map((sp) => sp.uri),
