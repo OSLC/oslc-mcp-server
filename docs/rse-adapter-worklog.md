@@ -268,3 +268,37 @@ more.** The file is git-ignored, so this is a local change; a backup of the prev
 
 Final state: **436 tests**, harness **104 vs 104, 0 differs** with a global configuration as the
 context.
+
+## 20:00 — beat 3 through the MCP tools, end to end
+
+This session's own MCP child was spawned before the adapter existed and cannot be restarted from
+inside the session, so the server was spawned separately and driven over the MCP protocol — which
+exercises the real tool dispatch rather than the modules behind it.
+
+```
+set_configuration_context  <the CDCM GLOBAL CONFIGURATION>   accepted on rse
+get_resource CMP-SF        rdf:type as URIs, and a description
+create_architecture_management_resources                     2 commits
+update_resource  satisfy = {SWR 2313}                        2 commits
+get_resource  the new unit    title, shortTitle, description, satisfy, _servedBy
+```
+
+**Verified against the raw OSLC AM surface**, because the adapter agreeing with itself proves
+nothing:
+
+```
+dcterms:title     "Ambient illumination estimator"
+oslc:shortTitle   "UNIT-SF-ILLUM-T"
+jazz_am:satisfy   re:TX_meqQEMP7EfGzk4igRoPQMQ
+```
+
+and in the model: owned by **CMP-SF** through a membership CMP-SF lists in return — all three
+directions — owning its documentation membership and the membership of the link.
+
+**Three things worked here that have never worked in this project.** A global configuration was
+accepted on RSE. Design content was written and read back as `dcterms:description`. And the whole
+of beat 3's structural change went through ordinary OSLC tool calls, with no script, no token
+pasted anywhere, and nothing orphaned.
+
+The original beat 3, twice: *"Blocked — this is content, and RSE exposes no `dcterms:description`
+in either shape"*, and *"the element never reached the model"*.
