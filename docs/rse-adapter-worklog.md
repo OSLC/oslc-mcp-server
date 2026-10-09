@@ -81,3 +81,50 @@ truncation signal, because nothing else will say so.
 
 **This changes phase 2 for the better** and the plan needs rewriting before the code is written:
 reads become a handful of server-side queries joined in memory, not element walks.
+
+## 16:10 — the query route is configuration-blind, and that nearly became the design
+
+Phase 2 was rewritten around `POST /query-results` because it projects server-side and expands
+`owningRelationship`. Then the harness refused a result that had filled its page — 1000
+`Documentation` rows from a commit holding 23 — and the reason turned out to be much worse than
+paging:
+
+| `commitId` | `PartUsage` |
+|---|---|
+| run-2 head / run-1 head / main head | **20 each** |
+| omitted | **20** |
+| a commit that does not exist | **20**, not rejected |
+
+The commit-scoped route answers 11 and 10 on those same branches. So `query-results` returns the
+union across the project's history and **says nothing about it** — the rows are real, correctly
+typed, correctly filtered, and from the wrong configuration. Quirk 37c.
+
+**It would have been invisible.** Every read would have been configuration-blind, in the direction
+that looks *more* complete. The only reason it surfaced is the guard written an hour earlier for a
+different reason — a client that refuses to return a page-filling result. That guard was written
+because of quirk 37b's silent truncation; it caught something else entirely.
+
+So reads go through `GET /commits/{c}/elements`, which is genuinely commit-scoped and pages
+honestly with a `Link … rel="next"` cursor. The ad-hoc route is kept for `OSLCLinkType` only —
+project-level, so being unscoped costs nothing there.
+
+**A second difference the rewrite exposed:** the two routes return `owningRelationship` in
+different shapes — expanded by the query route, a bare reference by the elements route. Owners now
+resolve through the element index from the same single read, which needs no extra request and
+works for both.
+
+## 16:25 — phases 2 and 3 done, and the substitution is proven
+
+```
+OSLC path   97 resources
+adapter     97 resources   (links 44, unresolved 0, docs 23)
+identical   74 | adapter adds 23 | DIFFERS 0 | only-one-side 0
+```
+
+Resource sets identical, so the measured exclusion reproduces RSE exactly. The 23 additions are
+the `Documentation` bodies — `dcterms:description`, the gap that blocked beat 3 in both runs.
+
+401 tests pass, 31 of them new. **Nothing pushed.**
+
+**Next:** phase 4, the write path, against the void run-2 branch; then phase 5, resolving a global
+configuration to the RSE contribution.
