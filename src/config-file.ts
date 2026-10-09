@@ -36,6 +36,17 @@ export interface OAuthEntry {
   clientSecret?: string;
   clientSecretEnv?: string;
   /**
+   * A file holding the client secret and nothing else, which is preferred to
+   * `clientSecretEnv` for an interactive workstation: an environment variable
+   * has to be exported before the process starts, so it reaches whichever
+   * child inherited it and nothing else — a server launched with it in its
+   * `env` block works while every script the operator runs alongside does not.
+   *
+   * Relative to the configuration file, or `~`-prefixed. Trailing whitespace is
+   * stripped. Should be mode 600; a looser mode is reported, not refused.
+   */
+  clientSecretFile?: string;
+  /**
    * Which grant obtains the token, and therefore whose identity it carries.
    * Defaults to `password` when the server also configures `credentials`, and
    * to `client_credentials` when it does not.
@@ -173,6 +184,7 @@ export function parseConfigFile(yamlText: string): ConfigFile {
         clientIdEnv: str(o.clientIdEnv),
         clientSecret: str(o.clientSecret),
         clientSecretEnv: str(o.clientSecretEnv),
+        clientSecretFile: str(o.clientSecretFile),
         grant: str(o.grant) as OAuthEntry['grant'],
         redirectUri: str(o.redirectUri),
         scope: str(o.scope),
@@ -181,7 +193,7 @@ export function parseConfigFile(yamlText: string): ConfigFile {
       // not a credential — it travels in plain sight in every authorize URL.
       // Warning about it would fire on a correctly configured server and train
       // the operator to ignore the warning that does matter.
-      if (!oauth.clientSecretEnv && oauth.clientSecret) {
+      if (!oauth.clientSecretEnv && !oauth.clientSecretFile && oauth.clientSecret) {
         console.error(
           `[config] Server \`${alias}\` uses a literal OAuth client secret. The ` +
           `configuration file is git-ignored, but it still travels in pastes, backups ` +

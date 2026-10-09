@@ -61,7 +61,7 @@ async function main(): Promise<number> {
   // secret on some other server is not a reason to refuse a token for the one
   // actually asked for. The named server's own failure is raised in full below.
   const tryOauth = (e: (typeof file.servers)[number]) => {
-    try { return resolveOAuth(e, process.env); } catch { return null; }
+    try { return resolveOAuth(e, process.env, file.baseDir); } catch { return null; }
   };
   const withOauth = file.servers.filter(tryOauth);
 
@@ -79,7 +79,7 @@ async function main(): Promise<number> {
 
   // Not `tryOauth` here: if the server asked for cannot be resolved, the reason
   // — usually a named environment variable that is unset — is the whole answer.
-  const oauth = resolveOAuth(entry, process.env);
+  const oauth = resolveOAuth(entry, process.env, file.baseDir);
   if (!oauth) {
     console.error(`Server \`${entry.alias}\` does not use OAuth, so it has no access token. ` +
                   `Servers that do: ${withOauth.map((e) => e.alias).join(', ') || '(none)'}`);

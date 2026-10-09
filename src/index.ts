@@ -76,7 +76,7 @@ function resolveServers(args: CliArgs):
       }
 
       const { username, password } = resolveCredentials(entry, process.env);
-      const oauth = resolveOAuth(entry, process.env);
+      const oauth = resolveOAuth(entry, process.env, file.baseDir);
       return {
         alias: entry.alias,
         config: {

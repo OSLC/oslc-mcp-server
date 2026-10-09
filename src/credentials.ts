@@ -1,3 +1,6 @@
+import { readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { ServerEntry } from './config-file.js';
 
 /**
@@ -75,9 +78,52 @@ export interface ResolvedOAuth {
  * value comes from, and quietly using a different source is how a stale
  * credential survives a rotation.
  */
+/**
+ * Read a secret held in a file of its own.
+ *
+ * Resolved against the configuration that named it rather than the working
+ * directory, for the same reason the token store is: where a process happens to
+ * be launched from must not decide whether it can authenticate.
+ */
+function readSecretFile(
+  spec: string, baseDir: string, alias: string, field: string
+): string {
+  const path = spec.startsWith('~/')
+    ? join(homedir(), spec.slice(2))
+    : resolve(baseDir, spec);
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (e) {
+    throw new Error(
+      `Server \`${alias}\`: cannot read \`${field}\` ${path} — ${(e as Error).message}`
+    );
+  }
+
+  // A file edited by hand ends in a newline, and a secret with a newline on it
+  // fails authentication with a message about the credential rather than about
+  // the whitespace.
+  const value = raw.trim();
+  if (!value) throw new Error(`Server \`${alias}\`: \`${field}\` ${path} is empty.`);
+
+  try {
+    const mode = statSync(path).mode & 0o777;
+    if (mode & 0o077) {
+      console.error(
+        `[config] ${alias}: ${path} is mode ${mode.toString(8)} — readable beyond its owner. ` +
+        `chmod 600 it.`
+      );
+    }
+  } catch { /* the read already succeeded; a failed stat is not worth failing over */ }
+
+  return value;
+}
+
 export function resolveOAuth(
   server: ServerEntry,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  baseDir: string = process.cwd()
 ): ResolvedOAuth | null {
   const oauth = server.oauth;
   if (!oauth) return null;
@@ -87,8 +133,20 @@ export function resolveOAuth(
   const clientId = oauth.clientIdEnv ? env[oauth.clientIdEnv] : oauth.clientId;
   if (oauth.clientIdEnv && !env[oauth.clientIdEnv]) missing.push(oauth.clientIdEnv);
 
-  const clientSecret = oauth.clientSecretEnv ? env[oauth.clientSecretEnv] : oauth.clientSecret;
-  if (oauth.clientSecretEnv && !env[oauth.clientSecretEnv]) missing.push(oauth.clientSecretEnv);
+  // An environment variable WINS WHEN SET, so a CI run can override the file
+  // without editing it; the file is the fallback, and is the normal case on a
+  // workstation. Only when neither yields a value is the variable reported
+  // missing — naming a file and an unset variable is not an error.
+  let clientSecret: string | undefined;
+  if (oauth.clientSecretEnv && env[oauth.clientSecretEnv]) {
+    clientSecret = env[oauth.clientSecretEnv];
+  } else if (oauth.clientSecretFile) {
+    clientSecret = readSecretFile(oauth.clientSecretFile, baseDir, server.alias, 'clientSecretFile');
+  } else if (oauth.clientSecretEnv) {
+    missing.push(oauth.clientSecretEnv);
+  } else {
+    clientSecret = oauth.clientSecret;
+  }
 
   if (missing.length > 0) {
     throw new Error(
