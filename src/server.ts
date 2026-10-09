@@ -788,7 +788,14 @@ export async function startServer(
       let result: string;
 
       const generatedHandler = runtime.handlers.get(inner);
-      if (generatedHandler) {
+      // The generated create_* and query_* tools are the OSLC factories and
+      // query capabilities. With an adapter they are served from the SysML
+      // side instead; without one this is untouched.
+      if (runtime.adapter && inner.startsWith('query_')) {
+        result = await runtime.adapter.queryResources();
+      } else if (runtime.adapter && inner.startsWith('create_') && inner !== 'create_service_provider') {
+        result = await runtime.adapter.createResource((args ?? {}) as Record<string, unknown>);
+      } else if (generatedHandler) {
         result = await generatedHandler(args ?? {});
       } else {
         switch (inner) {
@@ -838,9 +845,13 @@ export async function startServer(
               ? await runtime.adapter.getResource((args as { uri: string }).uri)
               : await handleGetResource(context as any, args as { uri: string });
             break;
-          case 'update_resource':
-            result = await handleUpdateResource(context as any, runtime.discovery, args as { uri: string; properties: Record<string, unknown> });
+          case 'update_resource': {
+            const a = args as { uri: string; properties: Record<string, unknown> };
+            result = runtime.adapter
+              ? await runtime.adapter.updateResource(a.uri, a.properties)
+              : await handleUpdateResource(context as any, runtime.discovery, a);
             break;
+          }
           case 'delete_resource':
             result = await handleDeleteResource(context as any, args as { uri: string });
             break;

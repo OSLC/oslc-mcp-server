@@ -75,11 +75,34 @@ console.log(`project ${rse.projectId}\nbranch  ${rse.branchId}\ncommit  ${commit
 // ---- path A: OSLC AM, which is what runs with the adapter disabled ----------
 // No oslc.select: ask for everything RSE will give, so the comparison is against
 // its fullest answer rather than against what we thought to request.
-const amRes = await fetch(`${AM}/resource`,
-  { headers: { ...H, Accept: 'text/turtle', 'Configuration-Context': ctxUriForAm } });
-const ttl = await amRes.text();
+//
+// AND FOLLOW oslc:next. This query base pages — ResponseInfo, oslc:next,
+// totalCount — unlike the SysML routes, which say nothing. Reading page one
+// only matched for as long as the model fitted on it, which is exactly how a
+// truncated answer passes for a complete one.
 const store = rdflib.graph();
-rdflib.parse(ttl, store, AM, 'text/turtle');
+const RES = /\/resource\/[0-9a-f-]{36}$/;
+const seen = new Set();
+let page = `${AM}/resource`, pages = 0;
+while (page && pages < 50) {
+  const res = await fetch(page, { headers: { ...H, Accept: 'text/turtle', 'Configuration-Context': ctxUriForAm } });
+  const g = rdflib.graph();
+  rdflib.parse(await res.text(), g, AM, 'text/turtle');
+  const before = seen.size;
+  for (const st of g.statements) { store.add(st); const u = String(st.subject.value); if (RES.test(u)) seen.add(u); }
+  pages++;
+  // There is no page two (quirk 37g): the same URL returns a different unstable
+  // sample of 100 each time, and `nextPage` advertises `pageNum=1` forever. So
+  // read until the accumulated DISTINCT count reaches oslc:totalCount, which is
+  // the only field here that tells the truth, and give up rather than loop.
+  const tc = g.statementsMatching(null, rdflib.sym('http://open-services.net/ns/core#totalCount'), null)
+    .map((st) => Number(st.object.value)).find((n) => Number.isFinite(n));
+  if (tc && seen.size >= tc) break;
+  if (!tc && seen.size === before) break;
+  const next = g.any(null, rdflib.sym('http://open-services.net/ns/core#nextPage'), null);
+  page = next ? String(next.value) : `${AM}/resource`;
+}
+console.log(`OSLC path read in ${pages} page${pages === 1 ? '' : 's'}`);
 const DC = (p) => rdflib.sym(`http://purl.org/dc/terms/${p}`);
 const lit = (s, p) => { const v = store.any(rdflib.sym(s), p); return v ? String(v.value) : undefined; };
 

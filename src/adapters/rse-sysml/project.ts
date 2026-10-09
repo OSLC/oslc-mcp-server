@@ -25,6 +25,8 @@ export interface SysmlElement {
   '@id': string;
   /** Present on a Relationship: the element it belongs to. */
   owningRelatedElement?: { '@id'?: string } | null;
+  /** The forward containment list, which is the one that counts. */
+  ownedRelationship?: { '@id': string }[] | null;
   '@type'?: string;
   declaredName?: string | null;
   declaredShortName?: string | null;
@@ -52,7 +54,21 @@ export function ownerOf(
   const inline = rel.owningRelatedElement?.['@id'];
   if (inline) return inline;
   const ref = (rel as { '@id'?: string })['@id'];
-  return ref ? byId?.get(ref)?.owningRelatedElement?.['@id'] : undefined;
+  if (!ref || !byId) return undefined;
+  const membership = byId.get(ref);
+  const owner = membership?.owningRelatedElement?.['@id'];
+  if (!owner) return undefined;
+
+  // **Containment must hold in BOTH directions**, and this is not pedantry.
+  // Detaching a link means removing its membership from the owner's forward
+  // `ownedRelationship` — a plain update, where deleting the element is not
+  // (quirk 38: treat API-created content as append-only). The membership goes
+  // on pointing back at its owner afterwards, so trusting that direction alone
+  // reports links the OSLC AM surface has already dropped. Measured: after one
+  // detach, this returned six targets where the AM surface served five.
+  const forward = byId.get(owner)?.ownedRelationship;
+  if (forward && !forward.some((r) => r['@id'] === ref)) return undefined;
+  return owner;
 }
 
 export interface ProjectionContext {

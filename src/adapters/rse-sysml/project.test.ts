@@ -109,3 +109,23 @@ describe('resourceUri', () => {
     expect(resourceUri(AM, 'abc')).toBe(`${AM}/resource/abc`);
   });
 });
+
+describe('ownerOf requires containment in both directions', () => {
+  const link = { '@id': 'l1', '@type': 'OSLCLink', owningRelationship: { '@id': 'mem' } };
+  const mem = { '@id': 'mem', '@type': 'OwningMembership', owningRelatedElement: { '@id': 'cmp' } };
+
+  it('resolves the owner when the owner lists the membership', () => {
+    const byId = new Map<string, any>([['mem', mem],
+      ['cmp', { '@id': 'cmp', ownedRelationship: [{ '@id': 'mem' }] }]]);
+    expect(ownerOf(link, byId)).toBe('cmp');
+  });
+
+  // Detaching a link removes the membership from the owner's forward list and
+  // leaves the membership pointing back. Trusting the back-pointer alone
+  // reports links the AM surface has already dropped — measured, 6 against 5.
+  it('treats a detached link as unowned, even though the membership still points back', () => {
+    const byId = new Map<string, any>([['mem', mem],
+      ['cmp', { '@id': 'cmp', ownedRelationship: [{ '@id': 'other' }] }]]);
+    expect(ownerOf(link, byId)).toBeUndefined();
+  });
+});

@@ -224,3 +224,47 @@ rejected for echoing derived properties, left seven unwired elements, and was ab
 **Artifacts left on the void run-2 branch**, deliberately: six test links, a `PROBE` part
 definition, and the redo's seven elements. The branch is void and run-3 cuts fresh streams from
 R1.0, so none of it survives into a run.
+
+## 19:30 — query and writes wired, and the acme config switched over
+
+`query_resources`, `update_resource` and the generated `create_*` tools now go through the adapter
+when the entry enables one. Exercised live:
+
+```
+update: documentation body        1 commit,  reads back
+update: trace = {A, B}            4 commits, reads back as both
+update: trace = {A}               B detaches, A remains
+update: trace = {}                empty
+update: an unmapped property      refused, with the known names listed
+create: no parent                 refused
+create: documented unit           2 commits, reads back with its description
+```
+
+**Removal detaches rather than deletes**, because API-created RSE content is append-only
+(quirk 38): the membership comes out of the owner's forward list, which is what the AM surface
+honours, and the `OSLCLink` element is left alone.
+
+**Two defects the exercise found, neither visible from reading the code.**
+
+*The read was wrong about detached links.* `ownerOf` resolved a link's source through the
+membership's back-pointer, which survives detaching — so the adapter reported six targets where
+the AM surface served five. Containment is now required in **both** directions.
+
+*Two links in one call shared a membership.* The add loop diffed against the state captured at
+entry, so the second create adopted the first link's membership; detaching either then removed
+both. The id set is now re-snapshotted before each create.
+
+**And the harness itself was truncating.** RSE's AM query base pages — `oslc:totalCount`,
+`oslc:nextPage`, size 100 — and the control path read page one. It matched perfectly for exactly
+as long as the model fitted on a page. Worse, there is no page two: the same URL returns a
+different unstable sample of 100 each time, and `nextPage` advertises `pageNum=1` forever. Reading
+to `totalCount` is the only correct method. Quirk 37g — and a caution about proof by comparison,
+since this is the check that certifies the adapter.
+
+**`oslc-mcp-server-acme.yaml`** now carries `adapter: rse-sysml` on the rse entry, and its pinned
+`configurationContext` is commented out with the reason. **No server in the file is pinned any
+more.** The file is git-ignored, so this is a local change; a backup of the previous version is at
+`~/.config/oslc/acme-yaml.bak`.
+
+Final state: **436 tests**, harness **104 vs 104, 0 differs** with a global configuration as the
+context.

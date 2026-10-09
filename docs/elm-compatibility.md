@@ -1379,6 +1379,30 @@ Rhapsody SE UI operation, which is what the run procedure already assumes.
 working branch, and the write that proves otherwise comes back as an internal error rather than as
 "this branch is not usable".
 
+### 37g. Above 100 resources, the AM query base returns a RANDOM SUBSET
+
+RSE's OSLC AM query base describes its own paging — `oslc:ResponseInfo`, `oslc:totalCount`,
+`oslc:nextPage`, page size 100 — and none of it works. Measured against a branch holding **102**:
+
+| | |
+|---|---|
+| one page | **100** resources, and the two missing look exactly like resources that do not exist |
+| the **same URL fetched twice** | 100 each time, **differing by two in each direction** — the set is unordered and unstable |
+| `oslc:nextPage` | carries `pageNum=1`, and the page it returns advertises `pageNum=1` again — **the cursor never advances** |
+| following `nextPage` | another ~100 of the same 102, two of them new |
+
+So there is no page two. There is one unstable sample of size 100, offered repeatedly, with a
+cursor that pretends otherwise. Reading the full set means **fetching until the accumulated
+distinct count reaches `oslc:totalCount`** — the only field that tells the truth — and a client
+that follows the cursor until it disappears never terminates.
+
+**Below 100 this is invisible**, which is why it has never been seen here: the `AEB-200 R1.0`
+baseline holds 93 AM resources, and every run so far has stayed under the page. A model that grows
+past 100 starts silently answering impact analyses from a random sample of itself.
+
+**It is also a warning about verification by comparison.** The harness that proves this adapter
+faithful read one page and matched perfectly — for exactly as long as the model fitted on it.
+
 ### 38. Deletion is a trap at both ends, and elements become permanently undeletable
 
 `DELETE` on a cleanly created, untouched AM resource works: 200, then 404. Beyond that:
