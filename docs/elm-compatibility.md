@@ -1260,6 +1260,42 @@ else will tell you.
 *`"where" does not match any of the allowed types`* — so an `and` is two queries intersected by the
 caller.
 
+### 37c. `query-results` ignores `commitId` entirely — it is configuration-blind
+
+The worst single finding in this document, because nothing about the response says it.
+
+`POST /projects/{p}/query-results?commitId={c}` applies its `where` correctly, projects its
+`select` correctly, and **ignores the configuration completely**. Measured against a project with
+three branches:
+
+| `commitId` | `PartUsage` returned |
+|---|---|
+| run-2's head | **20** |
+| run-1's head | **20** |
+| main's head | **20** |
+| omitted altogether | **20** |
+| `00000000-0000-0000-0000-000000000000` — a commit that does not exist | **20** |
+
+The commit-scoped elements route, on the same two branches, answers **11** and **10**. So 20 is the
+union across the project's history, and a **nonexistent commit is not even rejected**.
+
+**Nothing distinguishes this from a correct answer.** The rows are real elements, of the requested
+type, matching the constraint. Only the configuration is wrong — silently, and in a direction that
+makes results look *more* complete rather than less.
+
+**So `query-results` cannot be used for any configuration-scoped read**, which in a
+configuration-managed estate means any read about the product. Use
+`GET /projects/{p}/commits/{c}/elements?page[size]=1000`, which is genuinely commit-scoped — 263
+elements against one branch and 259 against another, on the same project.
+
+**What it remains good for:** things that are not configuration-scoped. `OSLCLinkType` is
+project-level, so enumerating the seven link types and their `linkTypeURI`
+(`http://jazz.net/ns/dm/linktypes#satisfy`) through this route is correct and cheap.
+
+> This was caught only because a client refused to return a result that had filled its page
+> (quirk 37b). Without that guard the query looked perfect: 1000 `Documentation` rows, all
+> correctly typed, from a commit holding 23.
+
 ### 38. Deletion is a trap at both ends, and elements become permanently undeletable
 
 `DELETE` on a cleanly created, untouched AM resource works: 200, then 404. Beyond that:
