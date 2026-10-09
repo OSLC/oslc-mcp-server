@@ -40,19 +40,63 @@ exists and maps to a fixed commit (phase 1), and the global configuration → co
 **Done when:** the adapter loads, resolves a context to a commit, and the disabled path is proven
 byte-identical to today by test.
 
-## Phase 2 — read substitution
+## Phase 2 — read substitution  *(rewritten 2026-10-09 after measuring the query route)*
 
-`get_resource` and `query_resources` from `GET /projects/{p}/commits/{c}/elements…`, projecting:
+The first version of this phase assumed element-by-element reads and a walk to find each
+element's `Documentation`. **`POST /projects/{p}/query-results?commitId={c}` makes that
+unnecessary**, and the measurements below are what the implementation is built on rather than
+inferred from.
+
+### What the query route gives us
+
+- **`select` projects server-side**, and a selected `owningRelationship` comes back **expanded**,
+  carrying `owningRelatedElement`. So one query returns every `Documentation` with its `body`
+  *and* the element it belongs to. No walking, no snapshot cache.
+- **`where` takes exactly one `PrimitiveConstraint`.** `CompositeConstraint` is rejected, so an
+  `and` is two queries intersected by the caller.
+- **Paging is a trap** (quirk 37b): unpaged silently returns 25 of 44, `page[size]=1000` returns
+  44, and `pageSize`/`limit` return **3** rather than falling back. No headers signal any of it.
+
+### The exposure rule, measured exactly
+
+RSE's AM surface exposes **97 of 263** elements, and the difference is an exclusion of three
+metaclasses rather than a rule about relationships:
+
+| | |
+|---|---|
+| **excluded** | `OwningMembership` (107), `OSLCLink` (44), `FeatureMembership` (15) — containment, and the link carrier |
+| **exposed** | everything else, *including* `FeatureTyping` (17), `NamespaceImport`/`NamespaceExpose` (6 each) |
+
+`263 − 166 = 97`. The adapter reproduces that exclusion exactly; a resource set that differs by one
+is a defect the harness must fail on.
+
+### Implementation
+
+**Four queries per tool call, independent of model size**, joined in memory:
+
+| | `where` | `select` |
+|---|---|---|
+| Q1 elements | per exposed metaclass, or `@id` for a single read | `@id`, `@type`, `declaredName`, `declaredShortName`, `ownedRelationship`, `owningRelationship` |
+| Q2 documentation | `@type = Documentation` | `@id`, `body`, `owningRelationship` |
+| Q3 links | `@type = OSLCLink` | `@id`, `linkType`, `linkURL`, `owningRelationship` |
+| Q4 link types | once, cached for the process — they are immutable | resolve `linkType` → a `jazz_am:` predicate |
+
+A single `get_resource` narrows Q1 to `@id` and filters Q2/Q3 by owner after the fact.
+
+**Every query sends `page[size]` explicitly and treats `length === pageSize` as truncation**, since
+nothing in the response will say so. A truncated read is reported as an error, never returned as a
+result — an assistant reasoning from absence cannot tell a short answer from a complete one, and
+that is the failure mode this whole project keeps paying for.
+
+### The projection
 
 | From | To |
 |---|---|
-| metaclass | `rdf:type` = `oslc_am:Resource`, `oslc_sysml:<Metaclass>` |
+| metaclass | `rdf:type` = `oslc_am:Resource`, `oslc_sysml:<Metaclass>` (unknown metaclass reported, never minted) |
 | `declaredName` / `declaredShortName` | `dcterms:title` / `oslc:shortTitle` |
-| owned `Documentation.body` | `dcterms:description` — **the gap that blocked two runs** |
-| owned `OSLCLink` | a link predicate, `linkType` resolved against Jazz `dmlinktypes`, `linkURL` the object |
 | `@id` | `dcterms:identifier` |
-
-An `OSLCLink` is **never** a resource in its own right.
+| owned `Documentation.body` | `dcterms:description` — **the gap that blocked two runs** |
+| owned `OSLCLink` | a link predicate on the owner: `linkType` → the predicate, `linkURL` → the object |
 
 ## Phase 3 — the comparison harness
 
