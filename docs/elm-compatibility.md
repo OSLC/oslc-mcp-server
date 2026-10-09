@@ -1295,6 +1295,29 @@ its `Documentation` and its `OSLCLink`s, and each is another element:
 So per-element reads are right for a model too large to page cheaply, and the collection route is
 right for everything else — on this model it wins even for a single resource.
 
+### 37e. The OSLC AM projection of a written link is asynchronous, by up to two minutes
+
+A commit is visible over SysML the instant it returns. Its appearance on the OSLC AM surface is
+not. Writing the same kind of `OSLCLink` three times on one branch:
+
+| | AM surface |
+|---|---|
+| first | visible at **t+0** |
+| second | absent for ten seconds, present about a minute later |
+| third | absent through **sixty-two seconds** of polling, present roughly thirty seconds after that |
+
+No further writes in between, and `projectId` null throughout — an earlier reading of this as a
+missing `projectId` was wrong, and the value does not even persist through a create.
+
+**The consequence is a verification trap.** Verify-by-read-back is the rule that makes writing to
+this estate safe, and here the obvious place to verify — the OSLC surface the rest of the world
+sees — can report failure for a minute after a perfectly good write. The response that invites is
+writing the change again.
+
+**So verify on the path you wrote through.** The SysML side is authoritative and immediate. The AM
+projection matters to *other* clients, so it is worth reporting and worth waiting for when a
+downstream consumer is the point; it is the wrong thing to gate a write on.
+
 ### 37c. `query-results` ignores `commitId` entirely — it is configuration-blind
 
 The worst single finding in this document, because nothing about the response says it.
