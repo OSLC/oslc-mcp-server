@@ -1260,6 +1260,41 @@ else will tell you.
 *`"where" does not match any of the allowed types`* — so an `and` is two queries intersected by the
 caller.
 
+### 37d. The single-element route IS commit-scoped, and says "absent" with a 200
+
+Unlike `query-results` (37c), `GET /projects/{p}/commits/{c}/elements/{id}` honours the commit. It
+just does not use a status code to say so. Asking for an element that beat 3 created on the run-2
+branch:
+
+| commit | answer |
+|---|---|
+| run-2 head | `200` `PartUsage`, owner set — it is there |
+| run-1 head | `200` **`UnknownElement`**, no owner |
+| main head | `200` **`UnknownElement`** |
+| run-2's own start commit | `200` **`UnknownElement`** |
+| a commit that does not exist | `200` **`UnknownElement`** |
+
+The collection route agrees exactly — 263 elements at run-2's head with the element present, 259 at
+run-1 and 256 at run-2's start commit without it — so the scoping is real and the two routes are
+consistent.
+
+**Two things to take from it.** A client that checks `response.ok` concludes the element exists in
+every configuration; absence has to be read from `@type === 'UnknownElement'`. And a **nonexistent
+commit is indistinguishable from an absent element**, so a mistyped commit id does not fail, it
+quietly reports that nothing is there.
+
+**Cost, measured.** A single element read this way needs its owned relationships walked to reach
+its `Documentation` and its `OSLCLink`s, and each is another element:
+
+| | requests |
+|---|---|
+| `UNIT-SF-GATE`, 2 owned relationships | **4** |
+| `CMP-SF`, 21 owned relationships, 14 links | **43** |
+| the whole 263-element commit, in one page | **1** |
+
+So per-element reads are right for a model too large to page cheaply, and the collection route is
+right for everything else — on this model it wins even for a single resource.
+
 ### 37c. `query-results` ignores `commitId` entirely — it is configuration-blind
 
 The worst single finding in this document, because nothing about the response says it.
