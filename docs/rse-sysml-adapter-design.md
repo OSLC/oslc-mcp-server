@@ -68,60 +68,91 @@ Taken from what runs 1 and 2 actually called, not from the domain.
 
 Three of those four already half-work today. Only the last is new behaviour.
 
-## Avoiding the double read
+## Revision, 2026-10-09: substitute rather than enrich
 
-The naive implementation reads each resource twice — OSLC first, then the SysML API to fill the
-blanks — which doubles the request count and triples it for a query. It is also unnecessary,
-because of a property of the SysML side that the AM side does not have:
+The first draft kept the OSLC call and filled its gaps from the SysML API, with a commit-keyed
+snapshot cache to avoid reading everything twice. **That is overkill, and the better design is to
+stop making the OSLC call at all.** Discovery stays OSLC-shaped, so tool generation is unchanged
+and the assistant never learns that RSE is different; behind the generated tools, the RSE
+implementations talk to the SysML v2 API directly.
 
-> **A commit is an immutable snapshot, and the whole of it can be read in one call.**
-> `GET /projects/{p}/commits/{commitId}/elements?page[size]=1000` returned all 256 elements of the
-> AEB-200 model in a single request.
+This is only possible if the JSON API carries everything the OSLC surface does — **including the
+links**, which was the open question. It does.
 
-So the adapter keeps a **snapshot cache keyed by `(projectId, commitId)`**, not a per-resource
-cache:
+### Measured: links are first-class SysML elements
 
-1. The configuration context already names the branch — `…/oslc_config/{projectId}/stream/{branchId}`.
-2. One cheap `GET /projects/{p}/branches/{b}` gives the head commit id.
-3. On first need, one bulk read populates the snapshot for that commit.
-4. Every enrichment in that tool call is then served from memory at **zero marginal requests**,
-   including a query returning fifty members.
-5. The entry is immutable: a commit never changes. It is evicted when a new head appears, and the
-   adapter invalidates it directly after any commit it makes itself.
+The 256-element model at the AEB-200 run-2 head contains **44 `OSLCLink` elements**:
 
-**Freshness:** re-validate the head **at most once per tool call**, never per resource. Within one
-call the snapshot is consistent by construction, which is also the semantically correct answer — a
-query and the resources it returns should describe one configuration, not a moving one.
+```json
+{ "@id": "01150f03-…", "@type": "OSLCLink",
+  "linkType":  { "@id": "aa97e14e-…" },
+  "linkURL":   "https://trs-filter.smartfacts.com/rm/resources/TX_stN40KLlEfGZYrwx-mJhfA",
+  "owningRelationship": { "@id": "8001641f-…" } }
+```
 
-Cost, steady state: **one small head check per tool call**, plus one bulk read per distinct commit.
-Against a baseline rather than a stream, even the head check is unnecessary.
+All three parts of a link are there:
 
-**Fallback.** If a model is large enough that the bulk read is not cheap, fall back to per-element
-reads above a configurable element-count threshold, and say which mode is in use. Measure before
-adding this; 256 elements is not a reason to build it.
+| | |
+|---|---|
+| **target** | `linkURL`, a full URI |
+| **type** | `linkType`, an element reference |
+| **source** | `owningRelationship` → `OwningMembership.owningRelatedElement` — resolved for the example above to `PartDefinition CMP-BAC` |
 
-**Open question.** Whether RSE's AM links are visible as SysML elements is unmeasured. If they are,
-more could be served from the snapshot; if they are not, links stay AM-side and the split above
-stands. Measure before designing further.
+**Two distinct link types across the 44, split 24 / 20** — which matches run-1's record of staging
+24 `jazz_am:satisfy` on the RSE side exactly, leaving 20 `jazz_am:trace`. The link-type elements
+are **not** in the branch snapshot; they are project- or library-level, so they need one additional
+read. They are immutable, so that read is cached once for the process, not per commit.
 
-## The provenance contract
+**So the precondition holds.** No enrichment, no snapshot cache, no per-property provenance: one
+source of truth, read directly.
 
-**This is the part that must not be compromised.** The moment `rse_get_resource` returns a
-`dcterms:description` that the adapter fetched from somewhere else, an assistant can no longer tell
-*RSE asserts this* from *our shim computed this*. That is exactly the misattribution failure this
-estate already generates on its own, reintroduced in the one place we control.
+### Two conversions the adapter owns
 
-Three rules:
+**1. `Configuration-Context` → commit.** SysML reads are commit-scoped and OSLC callers speak
+configurations. The context has one shape, `…/api/oslc_config/{projectId}/stream/{branchId}`, so:
 
-1. **Every synthesised or normalised value is declared**, in a form that survives rendering to
-   text — not a JSON key a renderer may drop. A result reports which properties came from the OSLC
-   response, which were filled from the SysML snapshot and at which commit, and which were
-   normalised in place.
-2. **The adapter is off by default and enabled explicitly**, per server entry — never auto-detected.
-   A server whose behaviour silently changes because something recognised it is the opposite of
-   this contract.
-3. **With the adapter disabled the code path is identical to today's**, and a test asserts it. The
-   point of removability is that a claim can always be re-checked against raw OSLC.
+```
+branchId  ──GET /projects/{p}/branches/{b}──>  head commit   (a stream: moves)
+                                               fixed commit  (a baseline: does not)
+```
+
+Reads resolve against that commit; writes go to the branch. **This also removes a whole class of
+error silently**: today a request with no context reaches RSE's default branch and the AM query
+base answers `500`, which reads as a server fault.
+
+**2. Global configuration → the RSE contribution.** The single most persistent defect in the
+example is that RSE cannot resolve a foreign global configuration — it matches on a component URL,
+not a configuration URI, so it serves its default branch or fails. The adapter can simply do what
+`run-setup.md` step 7 tells a human to do: fetch the global configuration, walk
+`oslc_config:contribution`, and take the one whose configuration is an RSE stream.
+
+**That is worth more than the gap-filling.** It removes the pinned `configurationContext` in the
+yaml, the only per-run file edit in the whole setup, the `allServers: false` discipline that exists
+solely because of it, and RSE's standing as *the one real exception*. `set_configuration_context`
+with a global configuration would simply work on all five servers.
+
+### What each operation becomes
+
+| Tool | Implementation |
+|---|---|
+| `get_resource` | `GET /projects/{p}/commits/{c}/elements/{id}`; project `declaredName`→`dcterms:title`, `declaredShortName`→`oslc:shortTitle`, the metaclass→an `rdf:type` URI, the owned `Documentation` body→`dcterms:description`, and owned `OSLCLink`s→link predicates |
+| `query_resources` | the commit's elements, filtered — one call, where the OSLC path needed one plus N |
+| `update_resource` | a commit carrying only the properties being set (quirk 28); link changes are `OSLCLink` elements |
+| `create_*` | the two-commit recipe, already measured |
+
+**The derived-property problem disappears** rather than being filtered: nothing is round-tripped,
+because the adapter composes the payload from the request rather than from a prior read.
+
+## Provenance, revised
+
+Substitution makes this simpler and stronger than per-property declaration. **The server declares
+once, at startup and in every RSE tool result, that it is served from the SysML v2 API rather than
+from OSLC AM** — one fact rather than a per-field audit.
+
+The removability requirement is unchanged and now matters more: with the adapter disabled the RSE
+tools behave exactly as today. That is not only an escape hatch, it is the **comparison harness** —
+a test that runs both paths against the same model and diffs the results is the only way to know
+the substitution is faithful, and it is worth building first.
 
 ## Module boundary
 
@@ -144,6 +175,13 @@ write path (G3, create) carries the value but also the state, since it reads the
 commits. Ship them separately.
 
 ## Risks
+
+- **The blast radius is now the whole RSE surface, not the gaps.** Enrichment could only be wrong
+  about one property; substitution can be wrong about everything. This is the price of the simpler
+  design and it is why the comparison harness comes first, not last.
+- **The metaclass→`rdf:type` mapping is ours to get right.** The OSLC path returned the metaclass
+  as a bare string, so nothing today depends on it being a URI — but the moment the adapter emits
+  one, it is asserting a type the assistant will filter and reason on.
 
 - **Scope creep into the product.** Mitigated only by the rule above: driven by tool calls, not by
   the domain. Worth re-checking at every addition.
