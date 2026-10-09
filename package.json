@@ -9,11 +9,12 @@
     "oslc-print-access-token": "dist/print-access-token.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/gen-sysml-types.mjs --check && tsc",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watchAll",
     "start": "node dist/index.js",
-    "token": "node dist/print-access-token.js"
+    "token": "node dist/print-access-token.js",
+    "gen:types": "node scripts/gen-sysml-types.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

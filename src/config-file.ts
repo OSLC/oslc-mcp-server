@@ -73,6 +73,18 @@ export interface ServerEntry {
   credentials?: CredentialsSpec;
   oauth?: OAuthEntry;
   serviceProviders?: ServiceProviderEntry[];
+  /**
+   * An adapter to put in front of this server's generated tools.
+   *
+   * Only `rse-sysml` exists: it serves Rhapsody SE from the OMG SysML v2 API
+   * instead of RSE's OSLC AM surface, which handles links and little else.
+   *
+   * **Named explicitly and never detected.** A server whose behaviour changes
+   * because something recognised it is the opposite of being able to check a
+   * claim against the raw provider — which is the whole reason the adapter is
+   * removable.
+   */
+  adapter?: 'rse-sysml';
 }
 
 export interface ConfigFile {
@@ -215,6 +227,16 @@ export function parseConfigFile(yamlText: string): ConfigFile {
       };
     });
 
+    if (s.adapter !== undefined && s.adapter !== 'rse-sysml') {
+      // Silently ignoring this would leave an operator believing a server is
+      // adapted when it is not, which is the hardest kind of configuration
+      // error to see: everything works, and answers are quietly worse.
+      throw new Error(
+        `Server \`${alias}\`: unknown \`adapter\` \`${String(s.adapter)}\` — the only ` +
+        `adapter is \`rse-sysml\`.`
+      );
+    }
+
     return {
       alias,
       baseUrl,
@@ -226,6 +248,7 @@ export function parseConfigFile(yamlText: string): ConfigFile {
       credentials,
       oauth,
       serviceProviders,
+      adapter: s.adapter === 'rse-sysml' ? 'rse-sysml' : undefined,
     };
   });
 
