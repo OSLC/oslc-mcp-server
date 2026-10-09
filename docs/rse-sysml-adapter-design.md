@@ -179,25 +179,29 @@ and could not distinguish from the right one.
 
 Measured on AEB-200, 2026-10-09: that configuration is **flat** — four contributions, all leaves,
 exactly one RSE. So this costs nothing in the example and everything on a real programme.
-**What is already known about how to do it**, which is more than it first appeared:
+**The traversal is the server's job, not the adapter's.** GCM and CDCM each perform the depth-first
+walk and return the flat ordered list, so **every client resolves skew the same way**. A client
+that walked the hierarchy itself would be implementing the convention a second time, and two
+implementations of a convention are two answers — which is precisely what the convention exists to
+prevent. An earlier draft of this section suggested doing it client-side because the ordering key
+is on the wire; that was wrong, and it is recorded here so it is not proposed again.
 
-- **`oslc_config:contributionOrder` is served on every contribution**, and it is sparse — AEB-200's
-  four are `0.0`, `1.0`, `3.0`, `10.0` — so it is an explicit ordering key, not a position. It is
-  already in the RDF the adapter reads.
-- **CDCM implements the traversal**, written here; **GCM's behaviour was established by
-  inspection** rather than from documentation, which is worth remembering when relying on it. The
-  GCM side of that work is in `smartfacts.cdcm.gcm-import` —
-  `RdfProperties.OSLC_CONFIG_CONTRIBUTION_ORDER`, `GcmContributionRdf`, and `ConfigurationImporter`,
-  which defaults a missing order to `0`.
-- So the adapter can do this **client-side**: depth-first over `oslc_config:contribution`, children
-  sorted by `contributionOrder`, first match wins. The server endpoint is the authority and is
-  cheaper — one request instead of a walk — but it is not a prerequisite. Its route is in the CDCM
-  source, which is not checked out here.
-- `?depth=all` is ignored by CDCM — byte-identical response — so the route is not guessable and
-  should be read rather than probed for.
+**So the work is to call that API**, and the only thing missing is its route and response shape:
 
-**This is the next piece of work on the adapter**, and the client-side version is small enough to
-do first and check against CDCM's answer afterwards.
+- **CDCM implements it**, written here. **GCM's behaviour was established by inspection** rather
+  than from documentation — worth remembering when relying on it. The GCM side of that work is in
+  `smartfacts.cdcm.gcm-import`: `RdfProperties.OSLC_CONFIG_CONTRIBUTION_ORDER`,
+  `GcmContributionRdf`, and `ConfigurationImporter`, which defaults a missing order to `0`.
+- `oslc_config:contributionOrder` is served on each contribution and is sparse — AEB-200's four are
+  `0.0`, `1.0`, `3.0`, `10.0` — so it is an explicit ordering key. Useful for *checking* the
+  server's answer; not a licence to compute one.
+- `?depth=all` is ignored by CDCM (byte-identical response), so the route is not guessable and
+  should be taken from the API rather than probed for.
+
+**Blocked on that API, and that is the right place to be blocked.** Until then the adapter walks
+one level and refuses when it finds more than one candidate or a nested contribution, which is
+correct for AEB-200 — a flat configuration with exactly one RSE contribution — and honest
+everywhere else.
 
 **That is worth more than the gap-filling.** It removes the pinned `configurationContext` in the
 yaml, the only per-run file edit in the whole setup, the `allServers: false` discipline that exists

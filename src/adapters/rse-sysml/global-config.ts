@@ -68,12 +68,13 @@ export interface GcHttp extends Http {
  * Measured on the AEB-200 estate, 2026-10-09: that global configuration is
  * **flat**, four contributions, all leaves, exactly one of them RSE. So the
  * limitation costs nothing here and will cost everything on a real programme.
- * The ordering key is already on the wire: `oslc_config:contributionOrder`,
- * sparse rather than positional — AEB-200's four are 0, 1, 3 and 10. So the
- * traversal can be done here (depth-first, children sorted by that key, first
- * match wins) without the server endpoint, which is the authority and cheaper
- * but not a prerequisite. `?depth=all` is ignored by CDCM, so that route is not
- * guessable and should be read from the CDCM source rather than probed for.
+ * **The traversal belongs to the server, and this must not reimplement it.**
+ * GCM and CDCM each perform the depth-first walk and return the flat ordered
+ * list, so every client resolves skew identically. Walking the hierarchy here
+ * would be a second implementation of the convention, and two implementations
+ * of a convention are two answers. `oslc_config:contributionOrder` is on the
+ * wire and is useful for checking the server's answer; it is not a licence to
+ * compute one. The route is pending.
  */
 export async function resolveGlobalConfiguration(
   http: GcHttp, gcUri: string, rseBaseUrl: string
