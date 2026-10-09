@@ -1226,6 +1226,40 @@ and `GET` each member at the branch head. A dangling one comes back as `@type: "
 Before staging content in bulk, it is worth confirming the query base answers 200 — a staging run that
 begins against a broken one will fail confusingly on its first read.
 
+### 37b. `query-results` truncates silently, and an unrecognised paging parameter answers differently wrong
+
+RSE implements the SysML v2 ad-hoc query route, `POST /projects/{p}/query-results?commitId={c}`,
+with a body of `{"@type":"Query","select":[…],"where":{…}}`. It is genuinely useful: `select`
+projects server-side, and **a selected `owningRelationship` comes back expanded**, so one query
+returns every `Documentation` with its `body` *and* the element that owns it — no walking.
+
+It also has the worst paging behaviour measured anywhere in this document. Against a branch holding
+**44** `OSLCLink` elements:
+
+| Request | Answer |
+|---|---|
+| no paging parameter | **25** — the default page, with nothing to say so |
+| `&page[size]=1000` | **44** ✓ |
+| `&pageSize=1000` | **3** |
+| `&limit=1000` | **3** |
+
+**There are no paging headers** — no `Link`, no total count, nothing. So a truncated answer and a
+complete one are the same shape, and an unrecognised parameter name does not fall back to the
+default: it returns a third, smaller, equally plausible number.
+
+Three wrong answers and one right one, none distinguishable from the result of a correct query.
+For anything that reasons from absence — an impact analysis, a traceability check, an assessment —
+this is the most expensive failure available, because it produces a confident wrong answer rather
+than an error.
+
+**So:** always send `page[size]` explicitly, spelled exactly that way; and treat
+`results.length === pageSize` as a truncation signal rather than a coincidence, because nothing
+else will tell you.
+
+**`where` takes a single `PrimitiveConstraint` only.** `CompositeConstraint` is rejected —
+*`"where" does not match any of the allowed types`* — so an `and` is two queries intersected by the
+caller.
+
 ### 38. Deletion is a trap at both ends, and elements become permanently undeletable
 
 `DELETE` on a cleanly created, untouched AM resource works: 200, then 404. Beyond that:
