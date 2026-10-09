@@ -135,13 +135,54 @@ with a global configuration would simply work on all five servers.
 
 | Tool | Implementation |
 |---|---|
-| `get_resource` | `GET /projects/{p}/commits/{c}/elements/{id}`; project `declaredName`→`dcterms:title`, `declaredShortName`→`oslc:shortTitle`, the metaclass→an `rdf:type` URI, the owned `Documentation` body→`dcterms:description`, and owned `OSLCLink`s→link predicates |
+| `get_resource` | `GET /projects/{p}/commits/{c}/elements/{id}`; project `declaredName`→`dcterms:title`, `declaredShortName`→`oslc:shortTitle`, the metaclass→an `rdf:type` URI (below), the owned `Documentation` body→`dcterms:description`, and owned `OSLCLink`s→link predicates |
 | `query_resources` | the commit's elements, filtered — one call, where the OSLC path needed one plus N |
 | `update_resource` | a commit carrying only the properties being set (quirk 28); link changes are `OSLCLink` elements |
 | `create_*` | the two-commit recipe, already measured |
 
 **The derived-property problem disappears** rather than being filtered: nothing is round-tripped,
 because the adapter composes the payload from the request rather than from a prior read.
+
+### The `rdf:type` mapping is not ours to invent
+
+**`SysML-vocab.ttl` from the OMG reference implementation is the authority** — 182 `rdfs:Class`
+declarations under `oslc_sysml: <https://www.omg.org/spec/sysml/vocabulary#>`, each with an
+`rdfs:label` that is exactly the metaclass name, and a full `rdfs:subClassOf` hierarchy. The
+mapping is therefore mechanical rather than a judgement, which removes the risk this document
+previously listed.
+
+It also supplies the tie to OSLC:
+
+```turtle
+oslc_sysml:Element a rdfs:Class ;
+    rdfs:subClassOf oslc_am:Resource .
+```
+
+So every element is an `oslc_am:Resource` by inference, and the adapter emits
+
+```
+rdf:type   oslc_am:Resource , oslc_sysml:<Metaclass>
+```
+
+which is what RSE's `["am#Resource", "InterfaceDefinition"]` already *means*. It simply fails to
+make the second one a URI.
+
+**Coverage, checked against the AEB-200 model's fourteen metaclasses: thirteen are in the
+vocabulary.** The missing one is **`OSLCLink`**, and its absence is correct — it is an RSE
+extension, not OMG, and it must never be projected as a resource in the first place. An `OSLCLink`
+becomes a **link predicate on its source element**, which is exactly what the AM surface already
+does with it. Its `linkType` resolves against the Jazz `dmlinktypes` vocabulary
+(`http://jazz.net/ns/dm/linktypes#`), not this one — a separate, tiny, permanently cacheable
+lookup.
+
+The property URIs come from the same file: `declaredName`, `declaredShortName`, `body`,
+`ownedRelationship` and `owningRelatedElement` are all declared `rdf:Property`, so SysML-native
+properties can be exposed with authoritative URIs alongside the Dublin Core projections rather than
+invented ones.
+
+**The deployment does not serve it** — `…/api/oslc/SysML-vocab.ttl` is a 404 on this RSE — so the
+adapter vendors a copy. It is a specification artifact and changes with the spec, not with the
+deployment.
 
 ## Provenance, revised
 
@@ -179,9 +220,10 @@ commits. Ship them separately.
 - **The blast radius is now the whole RSE surface, not the gaps.** Enrichment could only be wrong
   about one property; substitution can be wrong about everything. This is the price of the simpler
   design and it is why the comparison harness comes first, not last.
-- **The metaclass→`rdf:type` mapping is ours to get right.** The OSLC path returned the metaclass
-  as a bare string, so nothing today depends on it being a URI — but the moment the adapter emits
-  one, it is asserting a type the assistant will filter and reason on.
+- ~~The metaclass→`rdf:type` mapping is ours to get right.~~ **Resolved**: `SysML-vocab.ttl` is the
+  authority and the mapping is mechanical. What remains is keeping the vendored copy current with
+  the spec, and handling RSE's own extensions — `OSLCLink`, `linkType`, `linkURL` — which are
+  deliberately outside it.
 
 - **Scope creep into the product.** Mitigated only by the rule above: driven by tool calls, not by
   the domain. Worth re-checking at every addition.
