@@ -128,3 +128,61 @@ the `Documentation` bodies — `dcterms:description`, the gap that blocked beat 
 
 **Next:** phase 4, the write path, against the void run-2 branch; then phase 5, resolving a global
 configuration to the RSE contribution.
+
+## 17:05 — phase 4, the write path, and two wrong turns
+
+Builders for the four measured rules, exercised six times against the void run-2 branch. Every
+link landed and read back; the read harness is still faithful afterwards.
+
+**I was wrong twice, and the second time is the finding.** A written link was missing from the
+OSLC AM surface; I diffed it against a native one, found `projectId` null on mine, set it, and the
+link appeared. I concluded `projectId` was required and changed the builder. Wrong twice over: the
+value does not persist through a create, and the same link was later visible with it still null.
+That is retrospective entry 1 — overgeneralising from one observation — committed a few hours
+after writing the entry down.
+
+The real behaviour, from writing the same link three more times: visible at **t+0** once, absent
+for ten seconds then present a minute later, and absent through **sixty-two seconds** of polling
+then present about thirty seconds after that. **The AM projection is asynchronous by up to two
+minutes.** Quirk 37e. The `projectId` change is reverted.
+
+The design consequence is the useful part: **verify on the path you wrote through.** The SysML side
+is authoritative and immediate; the AM projection matters to other clients, so it is reported and
+waited for, never gated on. A verification that fails for a minute after a correct write invites
+writing it again.
+
+## 17:20 — internal and external links, and where RSE left the standard
+
+The engineer's framing, checked against the reference implementation and confirmed with a
+refinement: the OMG API **does** have a standard external-link pair — `ExternalData` with a
+`resourceIdentifier`, and `ExternalRelationship` joining it to an element — and **RSE refuses
+both**: *Type not recognized*. `OSLCLink`/`OSLCLinkType` appear nowhere in OMG's vocabulary or
+reference implementation.
+
+RSE collapses the two into one element with the URL inline and adds a **typed** link, whose
+`linkTypeURI` is a real predicate. The standard shape has no place for that except as prose. So the
+divergence is defensible, the adapter has no choice, and link handling stays isolated.
+
+## 17:40 — phase 5, and the end of RSE's exception
+
+Given only the CDCM global configuration, the adapter walks its four contributions, selects
+*AEB-200 Design Models*, and produces the identical projection — **97 vs 97, 0 differs**.
+
+A contribution qualifies on two counts: its URI must parse as an RSE context **and** share an
+origin with the configured RSE server. Shape alone is not enough, because ETM's contribution URI
+also contains `/oslc_config/`.
+
+This removes the pinned `configurationContext`, the only per-run file edit in setup, the
+`allServers: false` rule that exists solely because of it, and RSE's standing as the one real
+exception.
+
+## Where this stands
+
+**All five phases are done and measured.** 434 tests pass; the harness and the write exercise both
+run green against the live estate. **Nothing is pushed.**
+
+**What is NOT done, and it matters:** the adapter's modules are built and proven, but they are
+**not wired into the MCP tool handlers**. `AdapterHooks` is described in the design and not yet
+implemented, so `rse_get_resource` still goes through raw OSLC. The remaining work is integration
+plus a test that the disabled path is byte-identical to today — which is also the removability
+proof the design promises.
